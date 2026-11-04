@@ -13,6 +13,7 @@ import {
   addSlideComment,
   applyHeaderFooter,
   applyThemeToArchive,
+  applyMasterTextStylesToArchive,
   commitSaved,
   materializeSlide,
   remapDeckColors,
@@ -725,6 +726,63 @@ register({
       )
     }
     return { op }
+  },
+})
+
+// ── setMasterTextStyles ────────────────────────────────────────────────
+// Slide-master <p:txStyles> (title lvl1, body lvls) size/bold: the deck-wide text
+// style edit PowerPoint makes in Slide Master view. Entry surgery on the master parts
+// after baking unsaved edits; the reparse that refreshes inherited styles stays in the shim.
+const MASTER_LEVEL_KEYS = new Set(['sizePt', 'bold'])
+function validateMasterLevel(where: string, v: unknown): void {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    throw new GuidedError(
+      `op "setMasterTextStyles": ${where} must be an object like { "sizePt": 40, "bold": true }.`,
+    )
+  }
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (!MASTER_LEVEL_KEYS.has(k))
+      throw new GuidedError(
+        `op "setMasterTextStyles": ${where}.${k} is not supported (sizePt, bold).`,
+      )
+    if (k === 'sizePt' && (typeof x !== 'number' || !(x > 0) || x > 4000)) {
+      throw new GuidedError(
+        `op "setMasterTextStyles": ${where}.sizePt must be a size in points (1-4000).`,
+      )
+    }
+    if (k === 'bold' && typeof x !== 'boolean')
+      throw new GuidedError(`op "setMasterTextStyles": ${where}.bold must be true or false.`)
+  }
+}
+register({
+  name: 'setMasterTextStyles',
+  validate(op) {
+    if (op.title === undefined && op.body === undefined) {
+      throw new GuidedError(
+        'op "setMasterTextStyles" needs "title" and/or "body" (body levels keyed "1".."9").',
+      )
+    }
+    if (op.title !== undefined) validateMasterLevel('title', op.title)
+    if (op.body !== undefined) {
+      if (typeof op.body !== 'object' || op.body === null || Array.isArray(op.body)) {
+        throw new GuidedError(
+          'op "setMasterTextStyles": body must be an object keyed by level "1".."9".',
+        )
+      }
+      for (const [lvl, v] of Object.entries(op.body as Record<string, unknown>)) {
+        if (!/^[1-9]$/.test(lvl))
+          throw new GuidedError(`op "setMasterTextStyles": body level "${lvl}" must be 1..9.`)
+        validateMasterLevel(`body.${lvl}`, v)
+      }
+    }
+  },
+  apply(op, ctx): OpRecord {
+    commitSaved(ctx.opened)
+    const patched = applyMasterTextStylesToArchive(ctx.opened, {
+      ...(op.title ? { title: op.title as { sizePt?: number; bold?: boolean } } : {}),
+      ...(op.body ? { body: op.body as Record<number, { sizePt?: number; bold?: boolean }> } : {}),
+    })
+    return { op, after: { patched } }
   },
 })
 

@@ -19,6 +19,7 @@ import {
   parsePlaceholderMap,
   parseMasterTextStyles,
   parseDefaultTextStyle,
+  type LevelTextStyle,
   type TextStyleLevels,
 } from './placeholder'
 import { isPresetShapeType } from './preset-shape-types'
@@ -373,6 +374,12 @@ export {
   type TableStylePreset,
 } from './table-edit'
 export { listMasterParts, parseMasterPart, type MasterPartInfo } from './master-edit'
+export {
+  applyMasterTextStylesToArchive,
+  patchMasterTextStylesXml,
+  type MasterLevelPatch,
+  type MasterTextStyleSpec,
+} from './master-text-styles'
 
 // The following functions are implemented in this file and exposed directly via
 // export function (see below): editPictureSrcRect, setSlideBackground,
@@ -1114,6 +1121,42 @@ export function setSlideBgGraphicsHidden(opened: OpenedPptx, slide: Slide, hidde
 }
 
 /** Layout/master inheritance bundle for one slide (theme + placeholder maps + part media rels). */
+/** One resolved master text style level (what a placeholder of that family inherits). */
+export interface MasterTextLevel {
+  fontSize?: number
+  bold?: boolean
+  /** Resolved latin font (theme refs like +mj-lt resolved through the slide's theme) */
+  latinFont?: string
+  /** Unresolved theme ref (+mj-lt / +mn-lt) when the master uses one */
+  latinFontRef?: string
+}
+
+/**
+ * The master text styles the given slide inherits: titleStyle lvl1 and bodyStyle
+ * lvl1..3 (a deck usually has one master; a slide on another master reports that one).
+ */
+export function readMasterTextStyles(
+  opened: OpenedPptx,
+  slideIndex = 0,
+): { title?: MasterTextLevel; body: Array<MasterTextLevel | undefined> } {
+  const slide = opened.deck.slides[slideIndex] ?? opened.deck.slides[0]
+  if (!slide) return { body: [] }
+  const tx = slideInheritanceCtx(opened.archive, slide.path).masterTextStyles
+  const pick = (l: LevelTextStyle | undefined): MasterTextLevel | undefined =>
+    l
+      ? {
+          ...(l.fontSize != null ? { fontSize: l.fontSize } : {}),
+          ...(l.bold != null ? { bold: l.bold } : {}),
+          ...(l.latinFont ? { latinFont: l.latinFont } : {}),
+          ...(l.latinFontRef ? { latinFontRef: l.latinFontRef } : {}),
+        }
+      : undefined
+  return {
+    ...(tx?.title?.levels[0] ? { title: pick(tx.title.levels[0]) } : {}),
+    body: [0, 1, 2].map((i) => pick(tx?.body?.levels[i])),
+  }
+}
+
 function slideInheritanceCtx(archive: PackageArchive, slidePath: string) {
   const chain = archive.resolveSlideChain(slidePath)
   const layoutXml = (chain.layoutPath ? archive.readText(chain.layoutPath) : undefined) ?? undefined

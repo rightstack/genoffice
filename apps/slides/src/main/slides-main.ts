@@ -119,6 +119,7 @@ import {
   promoteSlideBackground,
   autofitGeneratedTextBoxes,
   parseTheme,
+  readMasterTextStyles,
   reparseDeck,
   savePptx,
   savePptxToFile,
@@ -4234,6 +4235,51 @@ export function registerSlidesIpc(): void {
     session.fitWidthPx = op.fitWidthPx
     return buildAllRenderSlides(session.opened, op.fitWidthPx)
   })
+
+  // Slide-master text styles (title lvl1, body lvl1..3): read what the current deck's
+  // placeholders inherit, and write size/bold back into the masters (Slide Master view's
+  // text style edit). Same shape as apply-theme: one undo step, reparse, full rebuild.
+  ipcMain.handle('slides:get-master-text-styles', (e, slideIndex?: number) => {
+    const session = sessions.get(e.sender.id)
+    if (!session) return null
+    return readMasterTextStyles(session.opened, slideIndex ?? 0)
+  })
+
+  ipcMain.handle(
+    'slides:set-master-text-styles',
+    (
+      e,
+      op: {
+        title?: { sizePt?: number; bold?: boolean }
+        body?: Record<string, { sizePt?: number; bold?: boolean }>
+        fitWidthPx: number
+      },
+    ) => {
+      const session = sessions.get(e.sender.id)
+      if (!session) return null
+      const payload = {
+        op: 'setMasterTextStyles',
+        ...(op.title ? { title: op.title } : {}),
+        ...(op.body ? { body: op.body } : {}),
+      }
+      const plan = runTxn(session.opened, { ops: [payload], dryRun: true })
+      if (plan.failures?.length) return { error: plan.failures[0]!.error }
+      pushHistory(session)
+      const r = journaledTxn(session, 'edit', { ops: [payload] })
+      if (!r.applied) {
+        session.undoStack.pop()
+        return { error: r.failures?.[0]?.error ?? 'setMasterTextStyles failed' }
+      }
+      if ((r.records![0]!.after as { patched: number }).patched === 0) {
+        session.undoStack.pop()
+        return null
+      }
+      session.opened = reparseDeck(session.opened)
+      markMetaDirty(session)
+      session.fitWidthPx = op.fitWidthPx
+      return buildAllRenderSlides(session.opened, op.fitWidthPx)
+    },
+  )
 
   ipcMain.handle('slides:set-transition', (e, op: SetTransitionOp) => {
     const session = sessions.get(e.sender.id)

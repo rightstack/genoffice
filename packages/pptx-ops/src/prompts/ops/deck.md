@@ -99,6 +99,27 @@ GUID for a new one.
 
 Related: `addSection`, `renameSection`, `removeSection`, `moveSection` for single changes.
 
+### setMasterTextStyles
+
+`{title?:{sizePt?,bold?},body?:{"1".."9":{sizePt?,bold?}}} — slide-master text styles, whole deck`
+
+Sets the slide-master text styles every placeholder inherits: the title style
+and the body levels (1 = first-level body text, 2-9 = deeper list levels). Text
+with its own explicit size or bold keeps it; inherited text follows the master.
+
+| Field | Type                                            | Notes                                                   |
+| ----- | ----------------------------------------------- | ------------------------------------------------------- |
+| title | object `{sizePt?, bold?}`                       | Title placeholders (titleStyle level 1)                 |
+| body  | object keyed `"1"`..`"9"` of `{sizePt?, bold?}` | Body placeholder levels (bodyStyle); `sizePt` in points |
+
+```json
+{
+  "op": "setMasterTextStyles",
+  "title": { "sizePt": 40, "bold": true },
+  "body": { "1": { "sizePt": 20 } }
+}
+```
+
 ### applyTheme
 
 `{name,colors:{dk1?,lt1?,dk2?,lt2?,accent1?..accent6?,hlink?,folHlink?},majorFont?,minorFont?} — "#RRGGBB" slots, whole deck`
