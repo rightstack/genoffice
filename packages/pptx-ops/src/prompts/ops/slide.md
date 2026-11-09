@@ -275,3 +275,14 @@ comments on the page (both come from the comments pane data).
 ```json
 { "op": "deleteComment", "target": { "slide": 0 }, "authorId": 0, "idx": 0 }
 ```
+
+### editComment
+
+`{authorId,idx,text}`
+
+Replaces the text of a comment identified by its author id and index (as for
+`deleteComment`). The author, time and position stay; only the text changes.
+
+```json
+{ "op": "editComment", "target": { "slide": 0 }, "authorId": 0, "idx": 1, "text": "Shorter title, please." }
+```

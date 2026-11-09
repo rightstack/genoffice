@@ -21,6 +21,7 @@ import {
   deleteSlide,
   deleteSlideComment,
   duplicateSlide,
+  editSlideComment,
   insertBlankSlide,
   insertSlideWithLayout,
   autofitGeneratedTextBoxes,
@@ -702,6 +703,29 @@ register({
     if (!added)
       throw new GuidedError(`op "addComment": the comment could not be added to slide ${index}.`)
     return { op, after: added }
+  },
+})
+
+// [lily] Edit a comment's text in place (author, time, idx and position stay)
+register({
+  name: 'editComment',
+  validate(op, ctx) {
+    resolveSlide(ctx, op)
+    if (typeof op.authorId !== 'number' || typeof op.idx !== 'number') {
+      throw new GuidedError('op "editComment" needs "authorId" and "idx".')
+    }
+    if (typeof op.text !== 'string' || !op.text)
+      throw new GuidedError('op "editComment" needs "text".')
+  },
+  apply(op, ctx): OpRecord {
+    const { index } = resolveSlide(ctx, op)
+    const ref = { authorId: op.authorId as number, idx: op.idx as number, text: String(op.text) }
+    if (!editSlideComment(ctx.opened, index, ref)) {
+      throw new GuidedError(
+        `op "editComment": no comment (author ${op.authorId}, #${op.idx}) on slide ${index}.`,
+      )
+    }
+    return { op, after: op.text }
   },
 })
 

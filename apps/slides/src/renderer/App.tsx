@@ -2075,6 +2075,24 @@ export function App() {
     [current],
   )
 
+  // [lily] Edit a comment's text in place
+  const editComment = useCallback(
+    async (c: SlideComment, text: string) => {
+      const r = await window.slidesApi.editComment({
+        slideIndex: current,
+        authorId: c.authorId,
+        idx: c.idx,
+        text,
+      })
+      if (r) {
+        setComments(r)
+        setDirty(true)
+      }
+      return !!r
+    },
+    [current],
+  )
+
   const openComments = useCallback((focus: boolean) => {
     setShowComments(true)
     setShowFormat(false)
@@ -4498,6 +4516,7 @@ export function App() {
                     focusNonce={commentsFocusNonce}
                     onAdd={(text) => void addComment(text)}
                     onDelete={(c) => void deleteComment(c)}
+                    onEdit={(c, text) => editComment(c, text)}
                     onCollapse={() => setShowComments(false)}
                   />
                 ) : null}

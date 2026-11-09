@@ -215,6 +215,39 @@ export function addSlideComment(
   return { authorId, author: opts.author, initials, dt, idx: nextIdx, text: opts.text }
 }
 
+/**
+ * [lily] Edit a comment's text in place (by authorId + idx). Only <p:text> changes —
+ * author, dt, idx and badge position stay, so the comment keeps its place and order.
+ */
+export function editSlideComment(
+  opened: OpenedPptx,
+  slideIndex: number,
+  ref: { authorId: number; idx: number; text: string },
+): boolean {
+  const slide = opened.deck.slides[slideIndex]
+  if (!slide) return false
+  const { archive } = opened
+  const partPath = commentsPathForSlide(archive, slide.path)
+  if (!partPath) return false
+  const xml = archive.readText(partPath)
+  if (!xml) return false
+  for (const m of xml.matchAll(/<p:cm\b([^>]*)>([\s\S]*?)<\/p:cm>/g)) {
+    const attrs = m[1]!
+    if (
+      Number(/\bauthorId="(\d+)"/.exec(attrs)?.[1] ?? -1) !== ref.authorId ||
+      Number(/\bidx="(\d+)"/.exec(attrs)?.[1] ?? -1) !== ref.idx
+    )
+      continue
+    const text = `<p:text>${escapeXmlText(ref.text)}</p:text>`
+    const textRe = /<p:text\b[^>]*\/>|<p:text\b[^>]*>[\s\S]*?<\/p:text>/
+    const body = textRe.test(m[2]!) ? m[2]!.replace(textRe, () => text) : m[2]! + text
+    const cm = `<p:cm${attrs}>${body}</p:cm>`
+    setEntry(archive, partPath, xml.slice(0, m.index!) + cm + xml.slice(m.index! + m[0].length))
+    return true
+  }
+  return false
+}
+
 /** Delete a comment (by authorId + idx). */
 export function deleteSlideComment(
   opened: OpenedPptx,

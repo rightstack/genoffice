@@ -16,6 +16,8 @@ interface Props {
   focusNonce?: number
   onAdd: (text: string) => void
   onDelete: (c: SlideComment) => void
+  /** [lily] Edit a comment's text; resolves false on failure (a replacement pane renders the edit UI) */
+  onEdit?: (c: SlideComment, text: string) => Promise<boolean>
   onCollapse: () => void
 }
 

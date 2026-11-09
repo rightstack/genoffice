@@ -186,6 +186,7 @@ import type {
   SetLinkOp,
   CopyElementsOp,
   DeleteCommentOp,
+  EditCommentOp,
   DeleteElementOp,
   DeleteElementsOp,
   EditBackgroundOp,
@@ -4597,6 +4598,27 @@ export function registerSlidesIpc(): void {
           target: { slide: op.slideIndex },
           authorId: op.authorId,
           idx: op.idx,
+        },
+      ],
+    })
+    if (!r) return null
+    markMetaDirty(session)
+    return getSlideComments(session.opened.archive, slide.path)
+  })
+
+  // [lily] Edit a comment's text in place (one undo step, like add/delete)
+  ipcMain.handle('slides:edit-comment', (e, op: EditCommentOp) => {
+    const session = sessions.get(e.sender.id)
+    const slide = session?.opened.deck.slides[op.slideIndex]
+    if (!session || !slide) return null
+    const r = sessionTxn(session, {
+      ops: [
+        {
+          op: 'editComment',
+          target: { slide: op.slideIndex },
+          authorId: op.authorId,
+          idx: op.idx,
+          text: op.text,
         },
       ],
     })

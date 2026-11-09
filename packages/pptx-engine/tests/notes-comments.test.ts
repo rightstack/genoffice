@@ -6,6 +6,7 @@ import {
   addSlideComment,
   createBlankPptx,
   deleteSlideComment,
+  editSlideComment,
   getSlideComments,
   getSlideNotes,
   openPptx,
@@ -126,5 +127,21 @@ describe('slide comments', () => {
 
     const reopened = await openPptx(await savePptx(opened))
     expect(getSlideComments(reopened.archive, reopened.deck.slides[0]!.path)).toEqual([])
+  })
+
+  // [lily] editSlideComment: only <p:text> changes
+  it('edits the text in place and keeps author, time, idx and order', async () => {
+    const opened = await openPptx(await createBlankPptx())
+    const a = addSlideComment(opened, 0, { author: 'Alice', text: 'first' })!
+    const b = addSlideComment(opened, 0, { author: 'Bob', text: 'second' })!
+    expect(
+      editSlideComment(opened, 0, { authorId: a.authorId, idx: a.idx, text: 'fixed <&> text' }),
+    ).toBe(true)
+    const reopened = await openPptx(await savePptx(opened))
+    const list = getSlideComments(reopened.archive, reopened.deck.slides[0]!.path)
+    expect(list.map((c) => c.text)).toEqual(['fixed <&> text', 'second'])
+    expect(list[0]).toMatchObject({ authorId: a.authorId, idx: a.idx, dt: a.dt, author: 'Alice' })
+    expect(list[1]).toMatchObject({ authorId: b.authorId, idx: b.idx })
+    expect(editSlideComment(opened, 0, { authorId: 99, idx: 1, text: 'x' })).toBe(false)
   })
 })

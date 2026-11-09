@@ -287,6 +287,7 @@ export {
   getSlideComments,
   addSlideComment,
   deleteSlideComment,
+  editSlideComment,
   type SlideComment,
 } from './comments'
 export {

@@ -1000,6 +1000,14 @@ export interface AddCommentOp {
   text: string
 }
 
+/** [lily] Edit a comment's text: located by (authorId, idx); author and time stay. */
+export interface EditCommentOp {
+  slideIndex: number
+  authorId: number
+  idx: number
+  text: string
+}
+
 /** Delete a comment: uniquely located by (authorId, idx). */
 export interface DeleteCommentOp {
   slideIndex: number
@@ -1679,6 +1687,8 @@ export interface SlidesApi {
   addComment: (op: AddCommentOp) => Promise<SlideComment[] | null>
   /** Delete a comment; returns the page's updated comment list, null on failure */
   deleteComment: (op: DeleteCommentOp) => Promise<SlideComment[] | null>
+  /** [lily] Edit a comment's text; returns the page's updated comment list, null on failure */
+  editComment: (op: EditCommentOp) => Promise<SlideComment[] | null>
   /** System clipboard while text-editing (webContents.cut/copy/paste, for menu command echo) */
   nativeClipboard: (op: 'cut' | 'copy' | 'paste') => Promise<void>
   /** Nestable history transaction; all edits between begin/end become one undo step.
