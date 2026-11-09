@@ -1874,7 +1874,7 @@ export function App() {
       if (!v) {
         setShowFormat(false)
         setShowBgFormat(false)
-        setShowComments(false)
+        // [lily] the comments pane renders beside the right pane, so it stays open
       }
       return !v
     })
@@ -1885,7 +1885,6 @@ export function App() {
     setShowBgFormat(true)
     setShowFormat(false)
     setShowAnimPane(false)
-    setShowComments(false)
   }, [])
 
   /** Open the format pane (Home ribbon toggle / element context menu); never auto-opens on selection */
@@ -1893,7 +1892,6 @@ export function App() {
     setShowFormat(true)
     setShowBgFormat(false)
     setShowAnimPane(false)
-    setShowComments(false)
     if (section === 'size') setFormatSizeNonce((n) => n + 1)
   }, [])
 
@@ -2094,10 +2092,8 @@ export function App() {
   )
 
   const openComments = useCallback((focus: boolean) => {
+    // [lily] the comments pane opens beside the format / animation pane instead of replacing it
     setShowComments(true)
-    setShowFormat(false)
-    setShowBgFormat(false)
-    setShowAnimPane(false)
     if (focus) setCommentsFocusNonce((n) => n + 1)
   }, [])
 
@@ -4509,7 +4505,9 @@ export function App() {
                     onPreview={() => setAnimPreview((n) => n + 1)}
                     onCollapse={() => setShowAnimPane(false)}
                   />
-                ) : showComments ? (
+                ) : null}
+                {/* [lily] comments render beside the right pane (not one slot with format/animation) */}
+                {showComments && (
                   <CommentsPane
                     slideIndex={current}
                     comments={comments}
@@ -4519,7 +4517,7 @@ export function App() {
                     onEdit={(c, text) => editComment(c, text)}
                     onCollapse={() => setShowComments(false)}
                   />
-                ) : null}
+                )}
               </>
             )}
           </div>
