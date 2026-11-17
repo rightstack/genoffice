@@ -10,7 +10,7 @@
  */
 import type { PackageArchive } from './zip'
 import { relsPathFor, resolveTarget } from './zip'
-import { hasContentTypeOverride, maxRelationshipIdNumber } from './xml-utils'
+import { escapeXmlAttr, hasContentTypeOverride, maxRelationshipIdNumber } from './xml-utils'
 import type { SlideSize } from './types'
 import {
   LAYOUT_REL_TYPE,
@@ -141,7 +141,7 @@ function buildLayoutXml(def: BuiltinLayoutDef, size: SlideSize): string {
   return (
     XMLDECL +
     `<p:sldLayout xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}" type="${def.type}">` +
-    `<p:cSld name="${def.name}"><p:spTree>${EMPTY_SPTREE}${shapes.join('')}</p:spTree></p:cSld>` +
+    `<p:cSld name="${escapeXmlAttr(def.name)}"><p:spTree>${EMPTY_SPTREE}${shapes.join('')}</p:spTree></p:cSld>` +
     '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>'
   )
 }
@@ -164,15 +164,22 @@ function findMasterPath(archive: PackageArchive): string | null {
  * Make sure a built-in layout exists in the package and return its path.
  * Idempotent: an existing layout with the same canonical name is reused.
  * Returns null for an unknown key or a package without a slideMaster.
+ *
+ * `def` lets a host inject its own layout definition (same shape as the standard
+ * set — geometry in the 16:9 base, scaled on use) through the same registration
+ * path; when given, `key` is ignored.
  */
 export function ensureBuiltinLayout(
   archive: PackageArchive,
   size: SlideSize,
   key: string,
+  def: BuiltinLayoutDef | undefined = BUILTIN_LAYOUTS.find((d) => d.key === key),
 ): string | null {
-  const def = BUILTIN_LAYOUTS.find((d) => d.key === key)
   if (!def) return null
-  const existing = listSlideLayouts(archive).find((l) => l.name === def.name)
+  // listSlideLayouts reads the raw attribute (entities not decoded)
+  const existing = listSlideLayouts(archive).find(
+    (l) => l.name === def.name || l.name === escapeXmlAttr(def.name),
+  )
   if (existing) return existing.path
 
   const masterPath = findMasterPath(archive)

@@ -44,6 +44,32 @@ describe('builtinLayoutInfos', () => {
 })
 
 describe('ensureBuiltinLayout', () => {
+  it('injects a host-supplied definition through the same registration path', async () => {
+    const opened = await open()
+    const { archive, deck } = opened
+    const def = {
+      key: 'host-three-images',
+      name: 'Three Images & Title',
+      type: 'cust',
+      placeholders: [
+        { type: 'title', x: 838200, y: 365125, cx: 10515600, cy: 1325563 },
+        { type: '', idx: '1', x: 838200, y: 1825625, cx: 3352800, cy: 4351338 },
+        { type: '', idx: '2', x: 4419600, y: 1825625, cx: 3352800, cy: 4351338 },
+        { type: '', idx: '3', x: 8001000, y: 1825625, cx: 3352800, cy: 4351338 },
+      ],
+    }
+    const path = ensureBuiltinLayout(archive, deck.size, 'ignored', def)!
+    const xml = archive.readText(path)!
+    expect(xml).toContain('name="Three Images &amp; Title"')
+    expect(archive.readText('[Content_Types].xml')).toContain(`PartName="/${path}"`)
+    const listed = listSlideLayouts(archive).find((l) => l.path === path)!
+    expect(listed.placeholders).toHaveLength(4)
+    // idempotent by name
+    expect(ensureBuiltinLayout(archive, deck.size, 'ignored', def)).toBe(path)
+    // unknown key without a definition stays null
+    expect(ensureBuiltinLayout(archive, deck.size, 'host-three-images')).toBeNull()
+  })
+
   it('injects a fully registered layout part and is idempotent', async () => {
     const opened = await open()
     const { archive, deck } = opened
