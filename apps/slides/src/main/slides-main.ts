@@ -106,6 +106,7 @@ import {
   slideDurableId,
   getSlideComments,
   getSlideNotes,
+  getSlideNotesParagraphs,
   getSlideTransition,
   elementSpid,
   narrationSpids,
@@ -4552,11 +4553,26 @@ export function registerSlidesIpc(): void {
     return session && slide ? getSlideNotes(session.opened.archive, slide.path) : ''
   })
 
+  // [lily] notes as formatted paragraphs (bold / italic / lists) for hosts that edit them as markup
+  ipcMain.handle('slides:get-notes-paragraphs', (e, slideIndex: number) => {
+    const session = sessions.get(e.sender.id)
+    const slide = session?.opened.deck.slides[slideIndex]
+    return session && slide ? getSlideNotesParagraphs(session.opened.archive, slide.path) : []
+  })
+
   ipcMain.handle('slides:set-notes', (e, op: SetNotesOp) => {
     const session = sessions.get(e.sender.id)
     if (!session) return false
     const r = sessionTxn(session, {
-      ops: [{ op: 'setNotes', target: { slide: op.slideIndex }, text: op.text }],
+      ops: [
+        {
+          op: 'setNotes',
+          target: { slide: op.slideIndex },
+          text: op.text,
+          // [lily] formatted paragraphs (host converts its markdown notes)
+          ...(op.paragraphs ? { paragraphs: op.paragraphs } : {}),
+        },
+      ],
     })
     if (r) markMetaDirty(session)
     return r !== null

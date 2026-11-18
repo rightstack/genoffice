@@ -45,6 +45,7 @@ import {
   setSlideHidden,
   setSlideLayout,
   setSlideNotes,
+  type NotesParagraph,
   setSlideSize,
   setSlideTransition,
   elementSpid,
@@ -675,10 +676,16 @@ register({
   validate(op, ctx) {
     resolveSlide(ctx, op)
     if (typeof op.text !== 'string') throw new GuidedError('op "setNotes" needs "text".')
+    // [lily] optional formatted paragraphs (bold / italic / bullet / number / level)
+    if (op.paragraphs !== undefined && !Array.isArray(op.paragraphs))
+      throw new GuidedError('op "setNotes": "paragraphs" must be an array.')
   },
   apply(op, ctx): OpRecord {
     const { index } = resolveSlide(ctx, op)
-    if (!setSlideNotes(ctx.opened, index, String(op.text))) {
+    const paragraphs = Array.isArray(op.paragraphs)
+      ? (op.paragraphs as NotesParagraph[])
+      : undefined
+    if (!setSlideNotes(ctx.opened, index, String(op.text), paragraphs)) {
       throw new GuidedError(`op "setNotes": notes for slide ${index} could not be written.`)
     }
     return { op, after: op.text }

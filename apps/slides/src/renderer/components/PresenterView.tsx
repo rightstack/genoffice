@@ -32,6 +32,7 @@ import {
   type ShowScreen,
 } from '../show-keys'
 import { liftShowCurtain } from '../show-actions'
+import { NotesText } from './notes-text'
 
 /** Layout constants (aligned with styles.css) */
 const IS_MAC = navigator.platform.toLowerCase().includes('mac')
@@ -585,7 +586,7 @@ export function PresenterView({
           </div>
           <div className="pv-section-label">{t('panePresenterNotes')}</div>
           <div className="pv-notes" style={{ fontSize: noteSize }}>
-            {notes.trim() ? notes : t('panePresenterNoNotes')}
+            {notes.trim() ? <NotesText text={notes} /> : t('panePresenterNoNotes')}
           </div>
           <div className="pv-notes-size">
             <button

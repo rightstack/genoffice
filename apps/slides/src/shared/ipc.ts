@@ -992,6 +992,12 @@ export interface EditConnectorEndpointsOp {
 export interface SetNotesOp {
   slideIndex: number
   text: string
+  /** [lily] formatted paragraphs written instead of `text` (pptx-engine NotesParagraph) */
+  paragraphs?: {
+    runs: { text: string; bold?: boolean; italic?: boolean }[]
+    bullet?: 'char' | 'num'
+    level?: number
+  }[]
 }
 
 /** Add a comment (the author is the system username fetched by the main process). */

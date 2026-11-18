@@ -282,7 +282,15 @@ export {
   type ChartDataTable,
 } from './chart'
 export { parseChartExXml } from './chartex'
-export { getSlideNotes, setSlideNotes, notesPathForSlide, unescapeXml } from './notes'
+export {
+  getSlideNotes,
+  getSlideNotesParagraphs,
+  setSlideNotes,
+  notesPathForSlide,
+  unescapeXml,
+  type NotesParagraph,
+  type NotesRun,
+} from './notes'
 export {
   getSlideComments,
   addSlideComment,

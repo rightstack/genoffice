@@ -86,6 +86,97 @@ export function getSlideNotes(archive: PackageArchive, slidePath: string): strin
   return paras.join('\n')
 }
 
+/**
+ * [lily] Notes as lightly formatted paragraphs: bold / italic runs, bullet or
+ * auto-number lists and their level. Anything else in the XML (sizes, colours,
+ * fields' semantics, line breaks) reads as plain text, like getSlideNotes.
+ */
+export interface NotesRun {
+  text: string
+  bold?: boolean
+  italic?: boolean
+}
+export interface NotesParagraph {
+  runs: NotesRun[]
+  /** 'char' = <a:buChar>, 'num' = <a:buAutoNum>; absent = no bullet */
+  bullet?: 'char' | 'num'
+  /** 0-based list level (<a:pPr lvl>) */
+  level?: number
+}
+
+const isOn = (attrs: string, name: string) =>
+  new RegExp(`\\b${name}=["'](1|true)["']`).test(attrs)
+
+/** [lily] Read notes as formatted paragraphs (same paragraphs as getSlideNotes); [] if none. */
+export function getSlideNotesParagraphs(
+  archive: PackageArchive,
+  slidePath: string,
+): NotesParagraph[] {
+  const notesPath = notesPathForSlide(archive, slidePath)
+  if (!notesPath) return []
+  const xml = archive.readText(notesPath)
+  if (!xml) return []
+  const body = findBodySp(xml)
+  if (!body) return []
+  const tx = /<p:txBody>([\s\S]*?)<\/p:txBody>/.exec(body.xml)?.[1]
+  if (!tx) return []
+  const paras: NotesParagraph[] = [...tx.matchAll(/<a:p>([\s\S]*?)<\/a:p>/g)].map((p) => {
+    const inner = p[1]!
+    const pPr = /<a:pPr\b([^>]*?)(?:\/>|>([\s\S]*?)<\/a:pPr>)/.exec(inner)
+    const para: NotesParagraph = { runs: [] }
+    if (pPr) {
+      const lvl = Number(/\blvl=["'](\d+)["']/.exec(pPr[1]!)?.[1] ?? 0)
+      const kids = pPr[2] ?? ''
+      if (/<a:buAutoNum\b/.test(kids)) para.bullet = 'num'
+      else if (/<a:buChar\b/.test(kids)) para.bullet = 'char'
+      if (lvl > 0) para.level = lvl
+    }
+    for (const r of inner.matchAll(/<a:(r|fld)\b[^>]*>([\s\S]*?)<\/a:\1>/g)) {
+      const text = [...r[2]!.matchAll(/<a:t(?:\s[^>]*[^/>])?>([\s\S]*?)<\/a:t>/g)]
+        .map((t) => unescapeXml(t[1]!))
+        .join('')
+      if (!text) continue
+      const rPr = /<a:rPr\b([^>]*?)\/?>/.exec(r[2]!)?.[1] ?? ''
+      const run: NotesRun = { text }
+      if (isOn(rPr, 'b')) run.bold = true
+      if (isOn(rPr, 'i')) run.italic = true
+      para.runs.push(run)
+    }
+    return para
+  })
+  while (paras.length && !paras[paras.length - 1]!.runs.length && !paras[paras.length - 1]!.bullet)
+    paras.pop()
+  return paras
+}
+
+/** [lily] One formatted paragraph → <a:p> (list indent: 0.25in per level, hanging bullet). */
+function notesParagraphXml(p: NotesParagraph): string {
+  const lvl = Math.max(0, Math.min(8, Math.floor(p.level ?? 0)))
+  const pPr = p.bullet
+    ? `<a:pPr marL="${228600 * (lvl + 1)}" lvl="${lvl}" indent="-228600">` +
+      (p.bullet === 'num'
+        ? '<a:buFont typeface="+mj-lt"/><a:buAutoNum type="arabicPeriod"/>'
+        : '<a:buFont typeface="Arial"/><a:buChar char="&#8226;"/>') +
+      '</a:pPr>'
+    : ''
+  const runs = p.runs
+    .filter((r) => r.text !== '')
+    .map(
+      (r) =>
+        `<a:r><a:rPr lang="zh-CN"${r.bold ? ' b="1"' : ''}${r.italic ? ' i="1"' : ''} dirty="0"/>` +
+        `<a:t>${escapeXmlText(r.text)}</a:t></a:r>`,
+    )
+    .join('')
+  return `<a:p>${pPr}${runs || '<a:endParaRPr lang="zh-CN"/>'}</a:p>`
+}
+
+function buildNotesTxBodyRich(paragraphs: NotesParagraph[]): string {
+  const paras = paragraphs.length
+    ? paragraphs.map(notesParagraphXml).join('')
+    : '<a:p><a:endParaRPr lang="zh-CN"/></a:p>'
+  return `<p:txBody><a:bodyPr/><a:lstStyle/>${paras}</p:txBody>`
+}
+
 /** text (\n-separated) → notes txBody. */
 function buildNotesTxBody(text: string): string {
   const lines = text.split('\n')
@@ -110,7 +201,13 @@ const NOTES_BODY_SP_OPEN =
  * Write notes (overwrite): patch the existing notesSlide's body txBody;
  * if there is no notesSlide, create the part (with a notesMaster if needed).
  */
-export function setSlideNotes(opened: OpenedPptx, slideIndex: number, text: string): boolean {
+export function setSlideNotes(
+  opened: OpenedPptx,
+  slideIndex: number,
+  text: string,
+  /** [lily] formatted paragraphs; when given they are written instead of `text` */
+  paragraphs?: NotesParagraph[],
+): boolean {
   const slide = opened.deck.slides[slideIndex]
   if (!slide) return false
   const { archive } = opened
@@ -119,7 +216,7 @@ export function setSlideNotes(opened: OpenedPptx, slideIndex: number, text: stri
   const xml = archive.readText(notesPath)
   if (!xml) return false
 
-  const txBody = buildNotesTxBody(text)
+  const txBody = paragraphs ? buildNotesTxBodyRich(paragraphs) : buildNotesTxBody(text)
   const body = findBodySp(xml)
   let next: string
   if (body) {
