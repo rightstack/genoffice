@@ -460,6 +460,10 @@ export interface ChartLabel {
   fill?: string
   stroke?: string
   w?: number
+  /** [lily] rounded chip box (a line / area label that lands on a column) */
+  round?: boolean
+  /** [lily] build-time marker: a line / area point label with its series colour; resolved to a chip in buildChartNode when it overlaps a column */
+  chipOf?: string
 }
 
 /** Current chart style (for the Ribbon "Chart Design" display; kind aligns with EditChartOp.kind). */
@@ -493,6 +497,8 @@ export interface ChartRenderNode extends RenderNodeBase {
   styleInfo?: ChartStyleInfo
   /** Whole-chart background (chartSpace spPr, e.g. picture fill) drawn under all primitives */
   bgFill?: RenderFill
+  /** [lily] whole-chart opacity 0..1 (absent = opaque) */
+  opacity?: number
   /** Whole-chart frame border (chartSpace spPr ln) drawn over all primitives */
   border?: { color: string; widthPx: number }
   /** Plot-area fill/border rectangle, drawn under the gridlines */
@@ -505,6 +511,8 @@ export interface ChartRenderNode extends RenderNodeBase {
     borderColor?: string
     borderWidthPx?: number
   }
+  /** [lily] plot-area box in box-local px (between the axes; pie / doughnut = the square around the circle) — for the selection frame. Derived in buildChartNode */
+  plotBox?: { x: number; y: number; w: number; h: number }
   /** Gridlines / axis lines */
   gridLines: Array<{
     x1: number
@@ -526,7 +534,17 @@ export interface ChartRenderNode extends RenderNodeBase {
   /** Tick / category / legend / axis-title text */
   labels: ChartLabel[]
   /** Bars */
-  bars: Array<{ x: number; y: number; w: number; h: number; color: string; fill?: RenderFill }>
+  bars: Array<{
+    x: number
+    y: number
+    w: number
+    h: number
+    color: string
+    fill?: RenderFill
+    /** [lily] rounded value end: the side of the bar whose two corners get radius `r` (px); the axis side stays square */
+    roundEnd?: 'top' | 'bottom' | 'left' | 'right'
+    r?: number
+  }>
   /** Polylines (points is flat [x0,y0,x1,y1,...]); closed+fill for filled radar charts etc. */
   polylines: Array<{
     points: number[]
@@ -536,11 +554,17 @@ export interface ChartRenderNode extends RenderNodeBase {
     closed?: boolean
     fill?: string
     dash?: number[]
+    /** [lily] vertical gradient fill (plot top y1 → bottom y2) replacing `fill`; stops carry rgba colors */
+    fillGradient?: { y1: number; y2: number; stops: Array<{ pos: number; color: string }> }
+    /** [lily] circular gradient fill (centre → radius r), replacing `fill` (filled radar) */
+    fillRadial?: { cx: number; cy: number; r: number; stops: Array<{ pos: number; color: string }> }
+    /** [lily] drawn under the bars (area fills of an area + column combo) */
+    behind?: boolean
   }>
   /** Data-point markers (circles) */
-  markers: Array<{ x: number; y: number; r: number; color: string }>
+  markers: Array<{ x: number; y: number; r: number; color: string; /** [lily] outline colour (see-through bubbles) */ stroke?: string }>
   /** Legend swatches */
-  swatches: Array<{ x: number; y: number; w: number; h: number; color: string }>
+  swatches: Array<{ x: number; y: number; w: number; h: number; color: string; /** [lily] circle key (diameter = min(w, h)) */ round?: boolean }>
   /** Freeform filled paths (SVG data), painter's order — pseudo-3D pie rims / bar extrusion faces */
   paths?: Array<{ d: string; fill: string; stroke?: string; strokeWidthPx?: number; dy?: number }>
   /** Pie/doughnut wedges (angles: 12 o'clock = -90°, clockwise, Konva Arc semantics) */

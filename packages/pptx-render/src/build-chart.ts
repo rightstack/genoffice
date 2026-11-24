@@ -84,6 +84,129 @@ function defaultLineWidthPx(model: ChartModel, scale: number): number {
   return Math.max(1.5, ptToPx(model.hasStylePart ? 1.5 : 2.25, scale))
 }
 
+// ── [lily] 우리 확장의 모양(둥근 막대 끝 · 동그라미 범례 · 전체 불투명도 · 레이블 글자색) ──
+
+type BarEnd = 'top' | 'bottom' | 'left' | 'right'
+type BarPx = ChartRenderNode['bars'][number]
+
+/** 둥근 막대 끝(roundedBars): 값 쪽 끝의 두 모서리만, 반지름 = min(두께×0.25, 4pt) — docs(WordCraft)와 같은 규칙. 축 쪽은 네모. */
+function roundBarEnd(model: ChartModel, vp: Viewport, bar: BarPx | null | undefined, end: BarEnd): void {
+  if (!model.lily?.roundedBars || !bar) return
+  const thick = end === 'top' || end === 'bottom' ? bar.w : bar.h
+  const r = Math.min(thick * 0.25, ptToPx(4, vp.scale))
+  if (!(r > 0.4)) return
+  bar.roundEnd = end
+  bar.r = r
+}
+
+/** [lily] 막대 한쪽 끝(두 모서리)만 둥글게 — SVG path 데이터. 반지름은 변 길이를 넘지 않게 맞춘다. */
+export function roundEndPath(
+  b: { x: number; y: number; w: number; h: number; roundEnd?: string; r?: number },
+): string | null {
+  if (!b.roundEnd || !b.r) return null
+  const vertical = b.roundEnd === 'top' || b.roundEnd === 'bottom'
+  const r = Math.max(0, Math.min(b.r, vertical ? b.w / 2 : b.h / 2, vertical ? b.h : b.w))
+  if (r <= 0) return null
+  const { x, y, w, h } = b
+  const [tl, tr, br, bl] =
+    b.roundEnd === 'top'
+      ? [r, r, 0, 0]
+      : b.roundEnd === 'bottom'
+        ? [0, 0, r, r]
+        : b.roundEnd === 'left'
+          ? [r, 0, 0, r]
+          : [0, r, r, 0]
+  const arc = (rr: number, ex: number, ey: number) => (rr ? ` A ${rr} ${rr} 0 0 1 ${ex} ${ey}` : '')
+  return (
+    `M ${x + tl} ${y} L ${x + w - tr} ${y}` +
+    arc(tr, x + w, y + tr) +
+    ` L ${x + w} ${y + h - br}` +
+    arc(br, x + w - br, y + h) +
+    ` L ${x + bl} ${y + h}` +
+    arc(bl, x, y + h - bl) +
+    ` L ${x} ${y + tl}` +
+    arc(tl, x + tl, y) +
+    ' Z'
+  )
+}
+/** [lily] 선·영역 레이블이 막대 위에 놓이면 흰 둥근 칩(계열 색 테두리) + 어두운 글자 — 막대 안의 흰 레이블과 구분(docs `chip`). 막대와 안 겹치면 그대로. */
+function resolveLabelChips(node: ChartRenderNode): void {
+  for (const l of node.labels) {
+    const col = l.chipOf
+    if (!col) continue
+    delete l.chipOf
+    const r = { x: l.x, y: l.y, w: l.w ?? 0, h: l.fontSizePx * 1.2 }
+    const hit = node.bars.some(
+      (b) => r.x < b.x + b.w && r.x + r.w > b.x && r.y < b.y + b.h && r.y + r.h > b.y,
+    )
+    if (!hit) continue
+    l.fill = '#FFFFFF'
+    l.stroke = col
+    l.round = true
+    l.color = '#1F1F1F'
+  }
+}
+
+/** 영역 채우기 한 장. lily 차트는 docs 와 같이: 채우기는 그림 영역 위→아래로 옅어지는 그라데이션, 윤곽은 위쪽 선만(채우기를 다 그린 뒤 위에 얹음). */
+function pushArea(
+  node: ChartRenderNode,
+  model: ChartModel,
+  vp: Viewport,
+  plot: { y: number; h: number },
+  ser: ChartModel['series'][number],
+  color: string,
+  poly: number[],
+  edge: number[],
+  edges: ChartRenderNode['polylines'],
+  behindBars = false,
+): void {
+  const fill = ser.fillAlpha != null ? withAlpha(color, ser.fillAlpha) : color // [lily] translucent area
+  const grad =
+    model.lily && ser.fillGradAlpha
+      ? {
+          fillGradient: {
+            y1: plot.y,
+            y2: plot.y + plot.h,
+            stops: [
+              { pos: 0, color: withAlpha(color, ser.fillGradAlpha[0]) },
+              { pos: 1, color: withAlpha(color, ser.fillGradAlpha[1]) },
+            ],
+          },
+        }
+      : {}
+  if (model.lily && ser.lineWidthPt) {
+    node.polylines.push({ points: poly, color, widthPx: 0, closed: true, fill, ...grad, ...(behindBars ? { behind: true } : {}) })
+    edges.push({ points: edge, color, widthPx: Math.max(1, ptToPx(ser.lineWidthPt, vp.scale)) })
+  } else {
+    node.polylines.push({ points: poly, color, widthPx: 1, closed: true, fill, ...grad, ...(behindBars ? { behind: true } : {}) })
+  }
+}
+
+/** rgba(r, g, b, a) → the same colour opaque; other colours unchanged */
+function opaqueOf(c: string): string {
+  const m = /^rgba\(\s*(\d+),\s*(\d+),\s*(\d+)/.exec(c)
+  return m ? `rgb(${m[1]}, ${m[2]}, ${m[3]})` : c
+}
+
+function relLuminance(hex: string): number | null {
+  const m = /^#?([0-9a-f]{6})/i.exec((hex ?? '').trim())
+  if (!m) return null
+  const v = parseInt(m[1]!, 16)
+  const ch = (c: number) => {
+    const x = c / 255
+    return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * ch((v >> 16) & 255) + 0.7152 * ch((v >> 8) & 255) + 0.0722 * ch(v & 255)
+}
+
+/** 채우기 위 레이블 글자색: lily 차트는 docs 규칙(WCAG 4.5:1 이면 흰색, 아니면 #1F1F1F), 그 밖에는 기존대로 흰색. */
+function labelOnFill(model: ChartModel, fill: string | undefined): string {
+  if (!model.lily || !fill) return '#FFFFFF'
+  const l = relLuminance(fill)
+  if (l == null) return '#FFFFFF'
+  return 1.05 / (l + 0.05) >= 4.5 ? '#FFFFFF' : '#1F1F1F'
+}
+
 function shade(color: string, f: number): string {
   const m = /^#([0-9a-f]{6})$/i.exec(color)
   if (!m) return color
@@ -138,6 +261,32 @@ function dashArray(val: string | undefined, widthPx: number): number[] {
   }
 }
 
+/** [lily] selection-frame box: pie wedges -> square around the circle(s); otherwise the bounds of grid + axis lines (undefined = whole chart) */
+function derivePlotBox(node: ChartRenderNode): ChartRenderNode['plotBox'] {
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  if (node.wedges?.length) {
+    for (const w of node.wedges) {
+      x0 = Math.min(x0, w.cx - w.outerR)
+      x1 = Math.max(x1, w.cx + w.outerR)
+      y0 = Math.min(y0, w.cy - w.outerR)
+      y1 = Math.max(y1, w.cy + w.outerR)
+    }
+    const side = Math.max(x1 - x0, y1 - y0)
+    return { x: (x0 + x1) / 2 - side / 2, y: (y0 + y1) / 2 - side / 2, w: side, h: side }
+  }
+  for (const l of [...node.gridLines, ...node.axisLines]) {
+    x0 = Math.min(x0, l.x1, l.x2)
+    x1 = Math.max(x1, l.x1, l.x2)
+    y0 = Math.min(y0, l.y1, l.y2)
+    y1 = Math.max(y1, l.y1, l.y2)
+  }
+  if (!(x1 - x0 > 4 && y1 - y0 > 4)) return undefined
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
 export function buildChartNode(
   id: string,
   sourceId: string,
@@ -147,8 +296,22 @@ export function buildChartNode(
   metrics: FontMetricsProvider,
   media?: MediaResolver,
 ): ChartRenderNode | null {
+  // [lily] lily-docs draws a 15 cm wide chart with 9 pt text; keep that proportion (text size relative to the chart box) unless the part names its own size
+  // — the whole chart (text, line widths, markers, rounded ends) is drawn at the scale of a 15 cm chart fitted to the box
+  if (model.lily) {
+    const w15 = ptToPx((15 / 2.54) * 72, vp.scale)
+    const k = Math.min(Math.max(box.w / w15, 0.4), 6)
+    vp = { ...vp, scale: vp.scale * k }
+    if (model.defaultTextPt == null) model = { ...model, defaultTextPt: 9 }
+  }
   const node = buildChartNodeTitled(id, sourceId, model, box, vp, metrics, media)
+  if (node) node.plotBox = derivePlotBox(node)
   if (node && model.fontFamily) for (const l of node.labels) l.fontFamily ??= model.fontFamily
+  if (node && model.lily) {
+    resolveLabelChips(node)
+    if (model.lily.legendCircle) for (const sw of node.swatches) sw.round = true
+    if (model.lily.opacity != null) node.opacity = model.lily.opacity
+  }
   return node
 }
 
@@ -536,6 +699,17 @@ function buildChartNodeInner(
   // untouched - the cap only ever makes ticks sparser)
   const maxIntervals = Math.max(3, Math.min(10, Math.floor(box.h / (labelSizePx * 1.75))))
   const logBase = model.valAxis?.logBase
+  // [lily] docs lets a narrow line range (1000..1050) stay on its own scale instead of reaching zero
+  const lilyNarrowLine =
+    !!model.lily &&
+    model.kind === 'line' &&
+    !stacked &&
+    priVals.length > 0 &&
+    docsNarrow(arrayMin(priVals), arrayMax(priVals))
+  if (lilyNarrowLine) {
+    dataMin = arrayMin(priVals)
+    dataMax = arrayMax(priVals)
+  }
   const { min, max, ticks } = logBase
     ? logTicks(
         arrayMin(priVals.filter((v) => v > 0)),
@@ -553,6 +727,7 @@ function buildChartNodeInner(
         maxIntervals,
         false,
         model.valAxis?.majorUnit,
+        model.lily ? { zero: !lilyNarrowLine } : undefined,
       )
   // Secondary value axis ticks (right side): range fully independent of the primary (e.g. left axis revenue 0-250, right axis growth% 0-30)
   const sec = secVals.length
@@ -565,6 +740,7 @@ function buildChartNodeInner(
         maxIntervals,
         false,
         model.valAxis2?.majorUnit,
+        model.lily ? { zero: true } : undefined,
       )
     : undefined
 
@@ -787,7 +963,8 @@ function buildChartNodeInner(
     catGroupH -
     catTitleH -
     dtRows * dtRowH -
-    (legendPos === 'b' ? legendH : 0)
+    (legendPos === 'b' ? legendH : 0) -
+    (model.lily && !catNoReserve ? labelSizePx * 0.45 : 0) // [lily] docs leaves a little more room under the category labels
   // PowerPoint lays the plot out automatically once a data table is present (measured:
   // a saved inner layout of 64% frame height drew at 43%, exactly the auto reserve)
   const L = dt ? undefined : model.plotLayout
@@ -1035,6 +1212,10 @@ function buildChartNodeInner(
   const slotW = plot.w / n
   // c:orientation maxMin on the category axis flips the category order (first slot on the right)
   const catSlot = model.catAxis?.reversed ? (i: number) => n - 1 - i : (i: number) => i
+  // [lily] c:crossBetween midCat (areas): the first / last points sit on the plot's left / right edges. Only without bars (bars need their slots).
+  const midCat = !!model.crossMidCat && n > 1 && barSeriesIdx.length === 0
+  const ptX = (i: number) =>
+    midCat ? plot.x + (catSlot(i) / (n - 1)) * plot.w : plot.x + (catSlot(i) + 0.5) * slotW
   // Category-axis vertical gridlines: majors at slot boundaries, minors at slot midpoints
   const catGrid = majorGridColor(model.catAxis, model)
   const catMinor = minorGridColor(model.catAxis, model)
@@ -1094,7 +1275,7 @@ function buildChartNodeInner(
   if (!catLabelsOff)
     cats.forEach((cat0, i) => {
       if (i % lblSkip) return
-      const cx = plot.x + (catSlot(i) + 0.5) * slotW
+      const cx = ptX(i)
       const catSpc = catSpcPx ? { letterSpacingPx: catSpcPx } : {}
       if (drawRotate) {
         // Rotation is about the text's origin (left end). Negative angles slant up-right:
@@ -1190,12 +1371,26 @@ function buildChartNodeInner(
   }
 
   // ── Data series (bar series + line/area series can coexist: combo charts) ──
-  const dlSize = model.dataLabelPt ? ptToPx(model.dataLabelPt, vp.scale) : labelSizePx * 0.9
+  // [lily] docs draws data labels at the chart's text size
+  const dlSize = model.dataLabelPt
+    ? ptToPx(model.dataLabelPt, vp.scale)
+    : labelSizePx * (model.lily ? 1 : 0.9)
   const dlBold = !!model.dataLabelBold
   const dlSpcPx = model.dataLabelSpcPt ? ptToPx(model.dataLabelSpcPt, vp.scale) : 0
   const dlVertical = model.dataLabelRotDeg === -90
   // Data labels (c:dLbls showVal): white centered inside stacked segments, dark gray outside points/bars otherwise
-  const dLbl = (si: number, catIdx: number, cx: number, y: number, v: number, inside: boolean) => {
+  const dLbl = (
+    si: number,
+    catIdx: number,
+    cx: number,
+    y: number,
+    v: number,
+    inside: boolean,
+    /** [lily] fill under an inside label: picks white / dark by contrast */
+    onFill?: string,
+    /** [lily] a line / area point label: becomes a white chip in the series colour when it lands on a column */
+    chipOf?: string,
+  ) => {
     if (!(model.series[si]?.dataLabels ?? model.dataLabels)) return
     const text = applyCaps(
       composeDataLabel(model, si, catIdx, fmtDataLabel(v, labelFmt(model, si))),
@@ -1217,10 +1412,11 @@ function buildChartNodeInner(
       ...(dlSpcPx ? { letterSpacingPx: dlSpcPx } : {}),
       fontSizePx: size,
       color: inside
-        ? '#FFFFFF'
+        ? labelOnFill(model, onFill)
         : (ov?.color ?? model.defaultTextColor ?? (dlBold ? '#000000' : '#404040')),
       ...((ov?.text != null ? ov.bold : dlBold) ? { bold: true } : {}),
       ...labelBoxOf(model, si, catIdx, w),
+      ...(chipOf && model.lily ? { chipOf, w } : {}),
     })
   }
   if (barSeriesIdx.length && stacked) {
@@ -1231,6 +1427,8 @@ function buildChartNodeInner(
       const x = plot.x + catSlot(i) * slotW + (slotW - barW) / 2
       let posAcc = 0
       let negAcc = 0
+      let lastPos: BarPx | undefined // [lily] the outermost segment of the stack gets the rounded end
+      let lastNeg: BarPx | undefined
       barSeriesIdx.forEach((si) => {
         const ser = model.series[si]!
         const v = valueAt(si, i)
@@ -1244,16 +1442,36 @@ function buildChartNodeInner(
         const yTop = Math.min(yOf(from), yOf(to))
         const yBot = Math.max(yOf(from), yOf(to))
         if (ser.noFill) return
-        node.bars.push({
+        const bar: BarPx = {
           x,
           y: yTop,
           w: barW,
           h: Math.max(yBot - yTop, 0.5),
           color,
           ...pointFill(ser.pointFills?.[i]),
-        })
-        dLbl(si, i, x + barW / 2, (yTop + yBot) / 2 - dlSize * 0.55, ser.values[i]!, true)
+        }
+        node.bars.push(bar)
+        if (v > 0) lastPos = bar
+        else lastNeg = bar
+        if (model.lily) {
+          // [lily] docs rule: inside (centred) only when the segment is at least the glyph height + 2 × 3pt long; a floating
+          // bar (waterfall / funnel helper) puts it past its end in dark text, a plain stack leaves it out
+          const pad3 = ptToPx(3, vp.scale)
+          const fits = yBot - yTop >= dlSize * 1.3 + 2 * pad3 // docs LINE = 1.3
+          if (fits) dLbl(si, i, x + barW / 2, (yTop + yBot) / 2 - dlSize * 0.55, ser.values[i]!, true, color)
+          else if (model.series.some((q) => q.noFill))
+            dLbl(
+              si,
+              i,
+              x + barW / 2,
+              v > 0 !== rev ? yTop - pad3 - dlSize * 1.2 : yBot + pad3,
+              ser.values[i]!,
+              false,
+            )
+        } else dLbl(si, i, x + barW / 2, (yTop + yBot) / 2 - dlSize * 0.55, ser.values[i]!, true, color)
       })
+      roundBarEnd(model, vp, lastPos, rev ? 'bottom' : 'top')
+      roundBarEnd(model, vp, lastNeg, rev ? 'top' : 'bottom')
     }
   } else if (barSeriesIdx.length) {
     // clustered col: gapWidth is the category-group gap as a percentage of one bar's width;
@@ -1274,24 +1492,35 @@ function buildChartNodeInner(
         const yTop = Math.min(yOf(v), yOf(base))
         const yBot = Math.max(yOf(v), yOf(base))
         // Explicit per-point colors (c:dPt, varyColors multi-color single-series bars) win over the series color
-        node.bars.push({
+        const bar: BarPx = {
           x,
           y: yTop,
           w: barW,
           h: Math.max(yBot - yTop, 0.5),
           color: ser.pointColors?.[i] ?? color,
           ...pointFill(ser.pointFills?.[i]),
-        })
+        }
+        node.bars.push(bar)
         // 3D bars: the label clears the box's top face (its back edge rises depth3d above
         // the front top). The outer tip flips with a reversed axis (screen-space edges).
         const tipAbove = v >= 0 !== rev
+        roundBarEnd(model, vp, bar, tipAbove ? 'top' : 'bottom')
+        // [lily] docs: a clustered bar's label sits inside its end (white or dark by the fill's contrast) when it fits, else outside
+        const inEnd = !!model.lily && !depth3d && (yBot - yTop) >= dlSize * 1.15 + 6
         dLbl(
           si,
           i,
           x + barW / 2,
-          tipAbove ? yTop - dlSize * 1.15 - depth3d : yBot + dlSize * 0.15 + depth3d,
+          inEnd
+            ? tipAbove
+              ? yTop + 3
+              : yBot - 3 - dlSize * 1.15
+            : tipAbove
+              ? yTop - dlSize * 1.15 - depth3d
+              : yBot + dlSize * 0.15 + depth3d,
           v,
-          false,
+          inEnd,
+          bar.color,
         )
       })
     })
@@ -1309,6 +1538,7 @@ function buildChartNodeInner(
         0,
       ),
     )
+    const areaEdges: ChartRenderNode['polylines'] = [] // [lily] top-edge strokes, drawn over all area fills
     model.series.forEach((ser, si) => {
       const k = serKind(ser)
       if (k === 'bar') return
@@ -1324,24 +1554,28 @@ function buildChartNodeInner(
         for (let i = 0; i < n; i++) {
           let v = ser.values[i] ?? 0
           if (grouping === 'percentStacked') v = (v / (areaTotals[i] || 1)) * 100
-          const x = plot.x + (catSlot(i) + 0.5) * slotW
+          const x = ptX(i)
           const y0 = yOf(areaCum[i]!)
           bottom.push(x, y0)
           areaCum[i]! += v
           const y1 = yOf(areaCum[i]!)
           top.push(x, y1)
-          if (ser.values[i] != null)
-            dLbl(si, i, x, (y0 + y1) / 2 - dlSize * 0.55, ser.values[i]!, true)
+          if (ser.values[i] != null) {
+            // [lily] docs: a stacked area's label sits just above its top edge (dark), not inside the band
+            if (model.lily) dLbl(si, i, x, y1 - dlSize * 1.3, ser.values[i]!, false, undefined, color)
+            else dLbl(si, i, x, (y0 + y1) / 2 - dlSize * 0.55, ser.values[i]!, true, color)
+          }
         }
+        const edge = top.slice()
         for (let i = bottom.length - 2; i >= 0; i -= 2) top.push(bottom[i]!, bottom[i + 1]!)
-        node.polylines.push({ points: top, color, widthPx: 1, closed: true, fill: color })
+        pushArea(node, model, vp, plot, ser, color, top, edge, areaEdges, barSeriesIdx.length > 0)
         return
       }
       const lineStack = k === 'line' && stacked && !secSer && model.kind === 'line'
       const pts: number[] = []
       ser.values.forEach((v, i) => {
         if (v == null || i >= n) return
-        const x = plot.x + (catSlot(i) + 0.5) * slotW
+        const x = ptX(i)
         let vv = v
         if (lineStack) {
           vv = lineCum[i]! + (valueAt(si, i) ?? 0)
@@ -1350,7 +1584,7 @@ function buildChartNodeInner(
         const y = yOfSer(vv)
         pts.push(x, y)
         if (k === 'line' && ser.marker) node.markers.push({ x, y, r: markerR, color })
-        dLbl(si, i, x, y - dlSize * 1.3, v, false)
+        dLbl(si, i, x, y - dlSize * 1.3, v, false, undefined, color)
       })
       if (pts.length < 4) return
       // Stock series never connect points; whiskers/up-down bars are drawn below
@@ -1361,13 +1595,18 @@ function buildChartNodeInner(
         const sMin = secSer ? sec!.min : min
         const sMax = secSer ? sec!.max : max
         const baseY = yOfSer(Math.min(Math.max(0, sMin), sMax))
-        node.polylines.push({
-          points: [pts[0]!, baseY, ...pts, pts[pts.length - 2]!, baseY],
+        pushArea(
+          node,
+          model,
+          vp,
+          plot,
+          ser,
           color,
-          widthPx: 1,
-          closed: true,
-          fill: color,
-        })
+          [pts[0]!, baseY, ...pts, pts[pts.length - 2]!, baseY],
+          pts,
+          areaEdges,
+          barSeriesIdx.length > 0,
+        )
       } else {
         const w = ser.lineWidthPt ? Math.max(1, ptToPx(ser.lineWidthPt, vp.scale)) : lineW
         node.polylines.push({
@@ -1379,6 +1618,7 @@ function buildChartNodeInner(
         })
       }
     })
+    node.polylines.push(...areaEdges)
   }
 
   // ── Stock whiskers / up-down bars ────────────────────────────────
@@ -1394,7 +1634,7 @@ function buildChartNodeInner(
     for (let i = 0; i < n; i++) {
       const vals = stockSers.map((s) => s.values[i]).filter((v): v is number => v != null)
       if (vals.length < 2) continue
-      const x = plot.x + (catSlot(i) + 0.5) * slotW
+      const x = ptX(i)
       if (model.stock.hiLowLines) {
         node.axisLines.push({
           x1: x,
@@ -1435,7 +1675,8 @@ function buildChartNodeInner(
     const items = (model.legendOrder ?? model.series.map((_, i) => i)).map((i) => ({
       label: model.series[i]?.name ?? '',
       color: seriesColor(i),
-      line: !!model.series[i] && serKind(model.series[i]!) === 'line',
+      // [lily] circle keys for every series when the legend shape is circle (docs); otherwise a line series gets a line key
+      line: !!model.series[i] && serKind(model.series[i]!) === 'line' && !model.lily?.legendCircle,
       marker: !!model.series[i]?.marker,
     }))
     // A line series key is a ~2.25em line segment with its marker (PowerPoint measured 27px at
@@ -1551,7 +1792,7 @@ function buildOfPieNode(
   const mainVals = [...ser.values.slice(0, cut), other]
   const mainColors = [
     ...ser.values.slice(0, cut).map((_, i) => colorOf(i)),
-    palette[n % palette.length]!,
+    ser.pointColors?.[n] ?? palette[n % palette.length]!, // [lily] the "other" slice is point n (PowerPoint formats it with c:dPt idx=n)
   ]
   const secColors = secVals.map((_, k) => colorOf(cut + k))
 
@@ -1595,11 +1836,14 @@ function buildOfPieNode(
 
   const k = of.secondPieSize / 100
   const gap = (of.gapWidth / 100) * 2 * k // in main-pie radii
-  const r1 = Math.max(Math.min(plotH / 2, plotW / (2 + gap + 2 * k)), 5)
+  const barMode = !!of.bar // [lily] ofPieType=bar: the split points as a stacked bar (docs: main pie in the left 58%, bar in the right third)
+  const r1 = barMode
+    ? Math.max(Math.min(plotH / 2, (plotW * 0.58) / 2), 5)
+    : Math.max(Math.min(plotH / 2, plotW / (2 + gap + 2 * k)), 5)
   const r2 = r1 * k
   const x0 = plotX + (plotW - (2 * r1 + gap * r1 + 2 * r2)) / 2
   const cy = plotY + plotH / 2
-  const cx1 = x0 + r1
+  const cx1 = barMode ? plotX + (plotW * 0.58) / 2 : x0 + r1
   const cx2 = x0 + 2 * r1 + gap * r1 + r2
   const { ofPie: _of, legendPos: _lp, plotLayout: _pl, pctBase: _pb, ...rest } = model
   const seriesTotal = ser.values.reduce<number>((a, v) => a + pos(v), 0)
@@ -1618,12 +1862,14 @@ function buildOfPieNode(
     categories: string[],
     cx: number,
     r: number,
+    over: Partial<ChartModel> = {},
   ) =>
     buildPieNode(
       id,
       sourceId,
       {
         ...rest,
+        ...over,
         categories,
         series: [{ ...serRest, values, pointColors: colors }],
         pctBase: seriesTotal,
@@ -1638,8 +1884,19 @@ function buildOfPieNode(
       vp,
       metrics,
     )
-  const main = sub(mainVals, mainColors, [...model.categories.slice(0, cut), ''], cx1, r1)
-  const sec = sub(secVals, secColors, model.categories.slice(cut), cx2, r2)
+  // [lily] like docs (and PowerPoint): the joined slice is centred on 3 o'clock
+  const mainTotal0 = mainVals.reduce<number>((a, v) => a + pos(v), 0)
+  const joinedDeg = mainTotal0 > 0 ? (other / mainTotal0) * 360 : 0
+  const centredAng = model.lily && joinedDeg > 0 ? 90 - joinedDeg / 2 - ((mainTotal0 - other) / mainTotal0) * 360 : null
+  const main = sub(
+    mainVals,
+    mainColors,
+    [...model.categories.slice(0, cut), ''],
+    cx1,
+    r1,
+    centredAng != null ? { firstSliceAngDeg: centredAng } : {},
+  )
+  const sec = barMode ? null : sub(secVals, secColors, model.categories.slice(cut), cx2, r2)
   for (const part of [main, sec]) {
     if (!part) continue
     if (part.wedges?.length) (node.wedges ??= []).push(...part.wedges)
@@ -1648,17 +1905,67 @@ function buildOfPieNode(
   }
   // Connector lines: the "other" slice's edges lead to the secondary pie's top and bottom
   const mainTotal = mainVals.reduce<number>((a, v) => a + pos(v), 0)
+  // [lily] bar variant: the split points as one stacked bar right of the main pie, first point on top
+  const barH = Math.min(plotH * 0.85, 2 * r1)
+  const barW = Math.max(plotW * 0.34 * 0.4, 4)
+  const barX = plotX + plotW * 0.64 + (plotW * 0.34 - barW) / 2
+  const barY = cy - barH / 2
   if (other > 0 && mainTotal > 0) {
-    const start = -90 + (model.firstSliceAngDeg ?? 0) + ((mainTotal - other) / mainTotal) * 360
+    const first = centredAng ?? model.firstSliceAngDeg ?? 0
+    const start = -90 + first + ((mainTotal - other) / mainTotal) * 360
     const end = start + (other / mainTotal) * 360
     const at = (deg: number) => {
       const t = (deg * Math.PI) / 180
       return [cx1 + Math.cos(t) * r1, cy + Math.sin(t) * r1]
     }
+    if (model.lily) {
+      // the joined slice is drawn in its points' colours (as the second plot has them), so where they went reads at a glance
+      let a0 = start
+      secVals.forEach((v, j) => {
+        const sweep = (pos(v) / mainTotal) * 360
+        if (sweep > 0)
+          (node.wedges ??= []).push({
+            cx: cx1,
+            cy,
+            outerR: r1,
+            innerR: 0,
+            startDeg: a0,
+            sweepDeg: sweep,
+            color: secColors[j]!,
+          })
+        a0 += sweep
+      })
+    }
+    const toTop = barMode ? [barX, barY] : [cx2, cy - r2]
+    const toBottom = barMode ? [barX, barY + barH] : [cx2, cy + r2]
     node.polylines.push(
-      { points: [...at(start), cx2, cy - r2], color: '#A6A6A6', widthPx: 1 },
-      { points: [...at(end), cx2, cy + r2], color: '#A6A6A6', widthPx: 1 },
+      { points: [...at(start), ...toTop], color: '#A6A6A6', widthPx: 1 },
+      { points: [...at(end), ...toBottom], color: '#A6A6A6', widthPx: 1 },
     )
+  }
+  if (barMode && other > 0) {
+    const dlOn = ser.dataLabels ?? model.dataLabels
+    let y = barY
+    const bsize = ptToPx(model.dataLabelPt ?? chartTextPt(model) * 0.9, vp.scale)
+    secVals.forEach((v, j) => {
+      const sh = (pos(v) / other) * barH
+      if (sh <= 0) return
+      node.bars.push({ x: barX, y, w: barW, h: sh, color: secColors[j]! })
+      if (dlOn) {
+        const text = composeDataLabel(model, 0, cut + j, fmtDataLabel(v ?? 0, labelFmt(model, 0)))
+        if (text && sh >= bsize * 1.2) {
+          const w = measure(text) * (bsize / labelSizePx)
+          node.labels.push({
+            text,
+            x: barX + (barW - w) / 2,
+            y: y + sh / 2 - bsize * 0.55,
+            fontSizePx: bsize,
+            color: labelOnFill(model, secColors[j]),
+          })
+        }
+      }
+      y += sh
+    })
   }
   if (legendPos) {
     const sw = labelSizePx * 0.5
@@ -1952,7 +2259,7 @@ function buildPieNode(
         .join(', ')
       const text = composeDataLabel(model, 0, i, valueText)
       const dlPt = ov?.sizePt ?? model.dataLabelPt
-      const dlSize = dlPt ? ptToPx(dlPt, vp.scale) : labelSizePx * 0.9
+      const dlSize = dlPt ? ptToPx(dlPt, vp.scale) : labelSizePx * (model.lily ? 1 : 0.9)
       const dlBold = ov?.text != null ? !!ov.bold : !!model.dataLabelBold
       const dlW = metrics.measure(text, { ...style, fontSizePx: dlSize, bold: dlBold })
       if (text)
@@ -2859,6 +3166,7 @@ function buildHBarNode(
     maxIntervalsH,
     false,
     model.valAxis?.majorUnit,
+    model.lily ? { zero: true } : undefined,
   )
 
   // Layout: left category-label width + bottom value-tick row + legend
@@ -3044,7 +3352,10 @@ function buildHBarNode(
 
   // Data bars
   const gap = (model.gapWidthPct ?? 150) / 100
-  const dlSize = model.dataLabelPt ? ptToPx(model.dataLabelPt, vp.scale) : labelSizePx * 0.9
+  // [lily] docs draws data labels at the chart's text size
+  const dlSize = model.dataLabelPt
+    ? ptToPx(model.dataLabelPt, vp.scale)
+    : labelSizePx * (model.lily ? 1 : 0.9)
   const dLbl = (
     si: number,
     catIdx: number,
@@ -3052,6 +3363,8 @@ function buildHBarNode(
     yMid: number,
     v: number,
     inside: boolean,
+    /** [lily] fill under an inside label: picks white / dark by contrast */
+    onFill?: string,
   ) => {
     if (!(model.series[si]?.dataLabels ?? model.dataLabels)) return
     const text = composeDataLabel(model, si, catIdx, fmtDataLabel(v, labelFmt(model, si)))
@@ -3063,7 +3376,7 @@ function buildHBarNode(
       x: inside ? x - measure(text, size) / 2 : x,
       y: yMid - size * 0.55,
       fontSizePx: size,
-      color: inside ? '#FFFFFF' : (ov?.color ?? '#404040'),
+      color: inside ? labelOnFill(model, onFill) : (ov?.color ?? '#404040'),
       ...((ov?.text != null ? ov.bold : model.dataLabelBold) ? { bold: true } : {}),
       ...labelBoxOf(model, si, catIdx, measure(text, size)),
     })
@@ -3074,6 +3387,8 @@ function buildHBarNode(
       const y = rowY(i) + (slotH - barH) / 2
       let posAcc = 0
       let negAcc = 0
+      let lastPos: BarPx | undefined // [lily] the outermost segment of the stack gets the rounded end
+      let lastNeg: BarPx | undefined
       model.series.forEach((ser, si) => {
         const v = valueAt(si, i)
         if (v == null || v === 0) return
@@ -3085,16 +3400,31 @@ function buildHBarNode(
         // min/max in screen space: a reversed axis flips which value maps further right
         const xL = Math.min(xOf(from), xOf(to))
         const xR = Math.max(xOf(from), xOf(to))
-        node.bars.push({
+        const bar: BarPx = {
           x: xL,
           y,
           w: Math.max(xR - xL, 0.5),
           h: barH,
           color: ser.pointColors?.[i] ?? seriesColor(si),
           ...pointFill(ser.pointFills?.[i]),
-        })
-        dLbl(si, i, (xL + xR) / 2, y + barH / 2, ser.values[i]!, true)
+        }
+        node.bars.push(bar)
+        if (v > 0) lastPos = bar
+        else lastNeg = bar
+        if (model.lily) {
+          // [lily] same docs rule on a horizontal stack (funnel): centred when the label + 2 × 3pt fits, else past the end in dark text
+          const pad3 = ptToPx(3, vp.scale)
+          const lw = measure(
+            composeDataLabel(model, si, i, fmtDataLabel(ser.values[i]!, labelFmt(model, si))),
+            dlSize,
+          )
+          if (xR - xL >= lw + 2 * pad3) dLbl(si, i, (xL + xR) / 2, y + barH / 2, ser.values[i]!, true, bar.color)
+          else if (model.series.some((q) => q.noFill))
+            dLbl(si, i, v > 0 !== rev ? xR + pad3 : xL - pad3 - lw, y + barH / 2, ser.values[i]!, false)
+        } else dLbl(si, i, (xL + xR) / 2, y + barH / 2, ser.values[i]!, true, bar.color)
       })
+      roundBarEnd(model, vp, lastPos, rev ? 'left' : 'right')
+      roundBarEnd(model, vp, lastNeg, rev ? 'right' : 'left')
     }
   } else {
     const sCount = Math.max(model.series.length, 1)
@@ -3114,18 +3444,37 @@ function buildHBarNode(
         const y = rowY(i) + (slotH - groupH) / 2 + slotIdx * step
         const xL = Math.min(xOf(v), xOf(base))
         const xR = Math.max(xOf(v), xOf(base))
-        node.bars.push({
+        const bar: BarPx = {
           x: xL,
           y,
           w: Math.max(xR - xL, 0.5),
           h: barH,
           color: ser.pointColors?.[i] ?? color,
           ...pointFill(ser.pointFills?.[i]),
-        })
+        }
+        node.bars.push(bar)
         const lblText = composeDataLabel(model, si, i, fmtDataLabel(v, labelFmt(model, si)))
         // outer tip flips with a reversed axis (screen-space edges)
         const tipRight = v >= 0 !== rev
-        dLbl(si, i, tipRight ? xR + 4 : xL - 4 - measure(lblText, dlSize), y + barH / 2, v, false)
+        roundBarEnd(model, vp, bar, tipRight ? 'right' : 'left')
+        // [lily] docs: a clustered bar's label sits inside its end (white or dark by the fill's contrast) when it fits, else outside
+        const lblW = measure(lblText, dlSize)
+        const inEnd = !!model.lily && xR - xL >= lblW + 10
+        dLbl(
+          si,
+          i,
+          inEnd
+            ? tipRight
+              ? xR - 4 - lblW / 2 - 1
+              : xL + 4 + lblW / 2 + 1
+            : tipRight
+              ? xR + 4
+              : xL - 4 - lblW,
+          y + barH / 2,
+          v,
+          inEnd,
+          bar.color,
+        )
       })
     })
   }
@@ -3161,7 +3510,7 @@ function buildHBarNode(
     measure,
     pad,
     seriesColor,
-    !model.catAxis?.reversed,
+    !model.catAxis?.reversed && !model.lily, // [lily] docs lists the legend in series order
   )
   return node
 }
@@ -3213,23 +3562,41 @@ function buildScatterNode(
   const xMax = arrayMax(allX, 0)
   const yMin = arrayMin(allY, 0)
   const yMax = arrayMax(allY, 0)
-  const xPad = bubblePad(xMin, xMax)
-  const yPad = bubblePad(yMin, yMax)
+  // [lily] docs pads no bubble room; its x axis leaves 5% of the span left of the first point (not below zero)
+  const xPad = model.lily ? 0 : bubblePad(xMin, xMax)
+  const yPad = model.lily ? 0 : bubblePad(yMin, yMax)
+  // (arrayMin's 2nd argument is part of the min, so the true data ends are taken here)
+  const trueXMin = arrayMin(allX)
+  const trueXMax = arrayMax(allX)
+  const trueYMin = arrayMin(allY)
+  const trueYMax = arrayMax(allY)
+  const docsXMin =
+    model.lily && trueXMin > 0 && trueXMax > trueXMin
+      ? Math.max(trueXMin - 0.05 * (trueXMax - trueXMin), 0)
+      : trueXMin
 
   // The catAxis slot = the x axis (the engine dispatched by axPos)
   const xTicksR = ppTicks(
-    model.catAxis?.min ?? xMin - (xMin < 0 ? xPad : 0),
-    model.catAxis?.max ?? xMax + xPad,
+    model.catAxis?.min ?? (model.lily ? docsXMin : xMin - (xMin < 0 ? xPad : 0)),
+    model.catAxis?.max ?? (model.lily ? trueXMax : xMax + xPad),
     model.catAxis?.min == null,
     model.catAxis?.max == null,
     true,
+    undefined,
+    false,
+    model.lily ? model.catAxis?.majorUnit : undefined,
+    model.lily ? { zero: false } : undefined,
   )
   const yTicksR = ppTicks(
-    model.valAxis?.min ?? yMin - (yMin < 0 ? yPad : 0),
-    model.valAxis?.max ?? yMax + yPad,
+    model.valAxis?.min ?? (model.lily ? trueYMin : yMin - (yMin < 0 ? yPad : 0)),
+    model.valAxis?.max ?? (model.lily ? trueYMax : yMax + yPad),
     model.valAxis?.min == null,
     model.valAxis?.max == null,
     true,
+    undefined,
+    false,
+    model.lily ? model.valAxis?.majorUnit : undefined,
+    model.lily ? { zero: !docsNarrow(trueYMin, trueYMax) } : undefined,
   )
 
   const pad = Math.max(4, box.w * 0.01)
@@ -3348,15 +3715,19 @@ function buildScatterNode(
       flat.push(x, y)
       if (bubbles?.length && maxBubbleSize > 0) {
         const size = Math.abs(bubbles[p.i] ?? 0)
-        if (size > 0)
+        if (size > 0) {
+          // [lily] a single bubble series colours each bubble from the palette (c:dPt); see-through bubbles get a solid edge in their own colour
+          const bc = ser.pointColors?.[p.i] ?? color
           node.markers.push({
             x,
             y,
             r:
               maxBubbleR *
               (model.bubbleSizeIsWidth ? size / maxBubbleSize : Math.sqrt(size / maxBubbleSize)),
-            color,
+            color: bc,
+            ...(model.lily && /^rgba\(/.test(bc) ? { stroke: opaqueOf(bc) } : {}),
           })
+        }
       } else if (showMarker) node.markers.push({ x, y, r: markerR, color })
       const cellLab = ser.pointLabels?.[p.i]
       if (cellLab) {
@@ -3371,7 +3742,7 @@ function buildScatterNode(
           text: cellLab,
           x: x + r + 4,
           y: y - labelSizePx * 0.55,
-          fontSizePx: labelSizePx * 0.9,
+          fontSizePx: labelSizePx * (model.lily ? 1 : 0.9),
           color: model.defaultTextColor ?? '#404040',
         })
       }
@@ -3382,9 +3753,9 @@ function buildScatterNode(
       if (text) {
         node.labels.push({
           text,
-          x: x - measure(text, labelSizePx * 0.9) / 2,
+          x: x - measure(text, labelSizePx * (model.lily ? 1 : 0.9)) / 2,
           y: y - labelSizePx * 1.3,
-          fontSizePx: labelSizePx * 0.9,
+          fontSizePx: labelSizePx * (model.lily ? 1 : 0.9),
           color: model.defaultTextColor ?? '#404040',
         })
       }
@@ -3629,6 +4000,10 @@ function buildRadarNode(
     model.valAxis?.min == null,
     model.valAxis?.max == null,
     true,
+    undefined,
+    false,
+    model.lily ? model.valAxis?.majorUnit : undefined,
+    model.lily ? { zero: true } : undefined,
   )
 
   const pad = Math.max(6, Math.min(box.w, box.h) * 0.03)
@@ -3727,7 +4102,25 @@ function buildRadarNode(
         color,
         widthPx: lineW,
         closed: true,
-        ...(filled ? { fill: withAlpha(color, 0.4) } : {}),
+        ...(filled
+          ? model.lily
+            ? // [lily] docs: the radar fill is the series colour (opaque unless the series says otherwise); the gradient fades from the centre out to the ring
+              ser.fillRadialAlpha
+              ? {
+                  fill: withAlpha(color, ser.fillRadialAlpha[1]),
+                  fillRadial: {
+                    cx,
+                    cy,
+                    r: R,
+                    stops: [
+                      { pos: 0, color: withAlpha(color, ser.fillRadialAlpha[0]) },
+                      { pos: 1, color: withAlpha(color, ser.fillRadialAlpha[1]) },
+                    ],
+                  },
+                }
+              : { fill: ser.fillAlpha != null ? withAlpha(color, ser.fillAlpha) : color }
+            : { fill: withAlpha(color, 0.4) }
+          : {}),
       })
     }
   })
@@ -3829,6 +4222,50 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`
 }
 
+/** [lily] lily-docs 의 값 축 규칙(WordCraft `plot.rs` scale): 0 쪽이 아닌 끝은 데이터 폭의 5% 밖, 1·2·2.5·5·10 × 10^k 눈금(약 7칸)으로 바깥 올림 */
+function docsScale(
+  dlo0: number,
+  dhi0: number,
+  zero: boolean,
+  min: number | undefined,
+  max: number | undefined,
+  unit0?: number,
+): { min: number; max: number; ticks: number[] } {
+  const fallback = { min: 0, max: 1, ticks: [0, 0.2, 0.4, 0.6, 0.8, 1] }
+  const [dlo, dhi] = dhi0 > dlo0 ? [dlo0, dhi0] : [dlo0, dlo0 + 1]
+  const span = dhi - dlo
+  const endsLo = zero ? Math.min(dlo, 0) : dlo
+  const endsHi = zero ? Math.max(dhi, 0) : dhi
+  let lo = min ?? (endsLo < 0 ? endsLo - 0.05 * span : endsLo)
+  let hi = max ?? (endsHi > 0 ? endsHi + 0.05 * span : endsHi)
+  const unit = unit0 && Number.isFinite(unit0) && unit0 > 0 ? unit0 : undefined
+  if (hi <= lo) {
+    if (max == null) hi = lo + Math.max(unit ?? span, span)
+    else if (min == null) lo = hi - Math.max(unit ?? span, span)
+  }
+  if (!(hi > lo && Number.isFinite(hi) && Number.isFinite(lo))) return fallback
+  const raw = (hi - lo) / 7.5
+  const mag = 10 ** Math.floor(Math.log10(raw))
+  const auto = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((x) => x >= raw) ?? 10 * mag
+  const MAX_TICKS = 60
+  const most = Math.max(MAX_TICKS - 2, 1)
+  const step =
+    (unit && (hi - lo) / unit > most ? unit * Math.ceil((hi - lo) / unit / most) : unit) ?? auto
+  const loR = min != null ? lo : Math.floor(lo / step + 1e-9) * step
+  const hiR = max != null ? hi : Math.ceil(hi / step - 1e-9) * step
+  if (!(Number.isFinite(step) && step > 0 && hiR > loR)) return fallback
+  const ticks: number[] = []
+  for (let v = loR; v <= hiR + step * 1e-6 && ticks.length <= MAX_TICKS; v += step) ticks.push(round12(v))
+  return { min: loR, max: hiR, ticks }
+}
+
+/** [lily] docs 는 좁은 범위(1000..1050)의 선·분산·거품 축을 0 까지 늘리지 않는다 */
+function docsNarrow(lo: number, hi: number): boolean {
+  if (lo > 0) return (hi - lo) / hi < 1 / 6
+  if (hi < 0) return (hi - lo) / Math.abs(lo) < 1 / 6
+  return false
+}
+
 /**
  * Data range → ticks, mimicking PowerPoint/Excel automatic axes:
  * add 5% headroom to the data max, pick a step of 1/2/5×10^k (about 8 ticks max),
@@ -3847,7 +4284,11 @@ function ppTicks(
   noHeadroom = false,
   /** Explicit c:majorUnit: wins over the derived step and the interval cap */
   majorUnit?: number,
+  /** [lily] charts made by our app use lily-docs' axis rule (docsScale) instead of PowerPoint's; zero = the axis reaches zero */
+  docs?: { zero: boolean },
 ): { min: number; max: number; ticks: number[] } {
+  if (docs)
+    return docsScale(rawMin, rawMax, docs.zero, autoMin ? undefined : rawMin, autoMax ? undefined : rawMax, majorUnit)
   let lo = autoMin ? Math.min(rawMin, 0) : rawMin
   let hi = rawMax
   if (hi <= lo) hi = lo + 1

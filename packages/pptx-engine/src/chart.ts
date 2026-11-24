@@ -102,6 +102,12 @@ export interface ChartSeries {
   valFmt?: string
   /** Series belongs to c:stockChart: no connecting lines, participates in whisker/up-down-bar roles */
   fromStock?: boolean
+  /** [lily] Series fill opacity (0..1) from <a:alpha> on the solid fill (or the mean of a gradient's stops); set only when < 1. Painted on area fills so overlapping areas stay visible */
+  fillAlpha?: number
+  /** [lily] vertical gradient fill (a:lin ang 90°): opacity at the plot top → bottom (areas fade out downward like lily-docs) */
+  fillGradAlpha?: [number, number]
+  /** [lily] circular path gradient (a:path path="circle", radar fill): opacity at the centre → the outer ring */
+  fillRadialAlpha?: [number, number]
 }
 
 export interface ChartAxisStyle {
@@ -178,6 +184,37 @@ export interface ChartDataTable {
   lineColor?: string
 }
 
+/** [lily] c:extLst 의 우리 확장(JSON 사양)에서 읽는 모양 — 표준이 아닌 꾸밈(둥근 막대 끝·동그라미 범례·전체 불투명도 …) */
+export interface LilyChartLook {
+  roundedBars?: boolean
+  legendCircle?: boolean
+  /** whole-chart opacity 0..1 (absent = opaque) */
+  opacity?: number
+  radarGradient?: boolean
+}
+
+/** [lily] 어댑터(packages/adapters/genoffice/src/slides/chart-spec.ts SPEC_EXT_URI)와 같은 값 */
+export const LILY_CHART_EXT_URI = '{7B1E5C3A-4D2F-4E8A-9C61-1F0A2B3C4D5E}'
+
+function parseLilyLook(extLst: any): LilyChartLook | undefined {
+  const exts = ([] as any[]).concat(extLst?.['c:ext'] ?? [])
+  const ext = exts.find((e) => e?.['@_uri'] === LILY_CHART_EXT_URI)
+  const node = ext?.['lily:spec']
+  const raw = typeof node === 'string' ? node : node?.['#text']
+  if (typeof raw !== 'string') return undefined
+  try {
+    const m = JSON.parse(raw)
+    const out: LilyChartLook = {}
+    if (m.roundedBars) out.roundedBars = true
+    if (m.legendShape === 'circle') out.legendCircle = true
+    if (typeof m.opacity === 'number' && m.opacity >= 0 && m.opacity < 1) out.opacity = m.opacity
+    if (m.radarGradient) out.radarGradient = true
+    return out
+  } catch {
+    return undefined
+  }
+}
+
 export interface ChartModel {
   kind: ChartKind
   /** bar only: col = vertical columns, bar = horizontal bars */
@@ -240,7 +277,11 @@ export interface ChartModel {
   dataLabelsValPct?: boolean
   /** c:ofPieChart: the last splitPos points break out into a secondary pie (secondPieSize %
    *  of the main pie, gapWidth % of its diameter apart) */
-  ofPie?: { splitPos: number; secondPieSize: number; gapWidth: number }
+  ofPie?: { splitPos: number; secondPieSize: number; gapWidth: number; /** [lily] c:ofPieType bar: the split points as a stacked bar */ bar?: boolean }
+  /** [lily] the cartesian category axis crosses mid-category (c:crossBetween midCat): first/last points sit on the plot edges (areas) */
+  crossMidCat?: boolean
+  /** [lily] our own extension (chartSpace c:extLst, uri LILY_CHART_EXT_URI): look flags lily-docs charts share, so a saved pptx redraws the same */
+  lily?: LilyChartLook
   /** Percent data labels divide by this instead of the series sum (pie-of-pie secondary pie) */
   pctBase?: number
   /** Data labels include the series name / category name (c:showSerName / c:showCatName) */
@@ -417,6 +458,7 @@ export function parseChartXml(
         splitPos: num('c:splitPos', 2),
         secondPieSize: num('c:secondPieSize', 75),
         gapWidth: num('c:gapWidth', 150),
+        ...(piePlot['c:ofPieType']?.['@_val'] === 'bar' ? { bar: true } : {}),
       }
     }
   } else if (plotArea['c:scatterChart'] || plotArea['c:bubbleChart']) {
@@ -497,6 +539,12 @@ export function parseChartXml(
         !s.bubbleSizes && (plotKind === 'line' || plotKind === 'scatter' || plotKind === 'radar'),
       )
       if (color) s.color = color
+      const fillAlpha = serFillAlpha(ser['c:spPr'])
+      if (fillAlpha != null) s.fillAlpha = fillAlpha
+      const fillGrad = serFillGradAlpha(ser['c:spPr'])
+      if (fillGrad) s.fillGradAlpha = fillGrad
+      const fillRadial = serFillRadialAlpha(ser['c:spPr'])
+      if (fillRadial) s.fillRadialAlpha = fillRadial
       if (ser['c:smooth']?.['@_val'] === '1') s.smooth = true
       // Value-from-cells data labels (2012 c15 extension): strings live in the range cache,
       // gated by c15:showDataLabelsRange on the series dLbls
@@ -617,7 +665,8 @@ export function parseChartXml(
         const pointExpl: Array<number | undefined> = []
         for (const dPt of dPts) {
           const idx = parseInt(dPt['c:idx']?.['@_val'], 10)
-          if (!Number.isFinite(idx) || idx < 0 || idx >= s.values.length) continue
+          // [lily] idx === values.length is the "other" slice of a pie-of-pie / bar-of-pie
+          if (!Number.isFinite(idx) || idx < 0 || idx > s.values.length) continue
           const dSp = dPt['c:spPr']
           const c = resolveColorNode(dSp?.['a:solidFill'], theme)
           if (c != null) pointColors[idx] = c
@@ -702,6 +751,15 @@ export function parseChartXml(
 
   const model: ChartModel = { kind, categories, series }
   if (ofPie) model.ofPie = ofPie
+  {
+    // [lily] 우리 확장 + 영역 차트의 midCat
+    const look = parseLilyLook(doc['c:chartSpace']?.['c:extLst'])
+    // 폭포·깔때기(보이지 않는 보조 계열이 든 누적 막대)는 docs 처럼 네모 끝
+    if (look && series.some((s) => s.noFill)) delete look.roundedBars
+    if (look) model.lily = look
+    const vAx = ([] as any[]).concat(plotArea['c:valAx'] ?? [])
+    if (vAx.some((a) => a?.['c:crossBetween']?.['@_val'] === 'midCat')) model.crossMidCat = true
+  }
   if (categoryGroups) model.categoryGroups = categoryGroups
 
   if (is3D) {
@@ -789,6 +847,7 @@ export function parseChartXml(
     }
   }
 
+  const lilySpec = !!parseLilyLook(doc['c:chartSpace']?.['c:extLst']) // [lily]
   const legendNode = chart['c:legend']
   const legendPos = legendNode?.['c:legendPos']?.['@_val']
   if (legendNode) {
@@ -847,7 +906,9 @@ export function parseChartXml(
       const idx: number[] = []
       for (let i = g.start; i < g.end; i++) idx.push(i)
       // horizontal bars list bottom-up (Series N first), like the renderer stacks them
-      return (g.hbar && !catReversed) || (g.stacked && sideLegend) ? idx.reverse() : idx
+      // [lily] lily-docs lists stacked horizontal bars in series order
+      const hbarUp = g.hbar && !catReversed && !(g.stacked && lilySpec)
+      return hbarUp || (g.stacked && sideLegend) ? idx.reverse() : idx
     })
     const entriesRaw = legendNode['c:legendEntry']
     const entries: any[] = Array.isArray(entriesRaw) ? entriesRaw : entriesRaw ? [entriesRaw] : []
@@ -1144,7 +1205,13 @@ export function parseChartXml(
     if (pick?.date && catSerials && !categoryGroups) sortByDate(model, catSerials)
   }
   // Source-linked data labels inherit the value axis's number format
-  if (model.dataLabels && !model.dataLabelFmt && model.valAxis?.numFmt)
+  // [lily] except a 100%-stacked chart's axis "0%": its labels show the raw values (PowerPoint), not value × 100 %
+  if (
+    model.dataLabels &&
+    !model.dataLabelFmt &&
+    model.valAxis?.numFmt &&
+    model.grouping !== 'percentStacked'
+  )
     model.dataLabelFmt = model.valAxis.numFmt
 
   const dTable = plotArea['c:dTable']
@@ -1341,6 +1408,52 @@ function readPoints(cache: any): Array<string | null> {
 
 /** Series main color: line-family series read the ln stroke first; bars/pies read the
  *  solidFill first (their ln is a segment outline, e.g. black borders around bars). */
+/** [lily] <a:alpha val> (1/1000 %) of a color node (srgbClr / schemeClr child) → 0..1 */
+function colorNodeAlpha(node: any): number | undefined {
+  const c = node?.['a:srgbClr'] ?? node?.['a:schemeClr']
+  const v = parseInt(c?.['a:alpha']?.['@_val'], 10)
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v / 100000)) : undefined
+}
+
+/** [lily] Series fill opacity: solid fill's alpha, or the mean alpha of a gradient's stops; undefined when opaque */
+function serFillAlpha(spPr: any): number | undefined {
+  if (!spPr) return undefined
+  let alpha: number | undefined
+  if (spPr['a:solidFill']) alpha = colorNodeAlpha(spPr['a:solidFill'])
+  else if (spPr['a:gradFill']) {
+    const raw = spPr['a:gradFill']['a:gsLst']?.['a:gs']
+    const stops: any[] = Array.isArray(raw) ? raw : raw ? [raw] : []
+    const alphas = stops.map((g) => colorNodeAlpha(g))
+    if (alphas.length && alphas.every((x) => x != null))
+      alpha = alphas.reduce((x, y) => x! + y!, 0)! / alphas.length
+  }
+  return alpha != null && alpha < 1 ? alpha : undefined
+}
+
+/** [lily] two-stop vertical gradient with alpha on each stop → [top alpha, bottom alpha] */
+function serFillGradAlpha(spPr: any): [number, number] | undefined {
+  const g = spPr?.['a:gradFill']
+  if (!g) return undefined
+  const ang = parseInt(g['a:lin']?.['@_ang'], 10)
+  if (ang !== 5400000) return undefined
+  const raw = g['a:gsLst']?.['a:gs']
+  const stops: any[] = Array.isArray(raw) ? raw : raw ? [raw] : []
+  if (stops.length !== 2) return undefined
+  const a = stops.map((st) => colorNodeAlpha(st) ?? 1)
+  return [a[0]!, a[1]!]
+}
+
+/** [lily] two-stop circular path gradient with alpha on each stop → [centre alpha, edge alpha] */
+function serFillRadialAlpha(spPr: any): [number, number] | undefined {
+  const g = spPr?.['a:gradFill']
+  if (!g || g['a:path']?.['@_path'] !== 'circle') return undefined
+  const raw = g['a:gsLst']?.['a:gs']
+  const stops: any[] = Array.isArray(raw) ? raw : raw ? [raw] : []
+  if (stops.length !== 2) return undefined
+  const a = stops.map((st) => colorNodeAlpha(st) ?? 1)
+  return [a[0]!, a[1]!]
+}
+
 function serColor(ser: any, theme: Theme | undefined, preferLine: boolean): string | undefined {
   const spPr = ser['c:spPr']
   if (!spPr) return undefined

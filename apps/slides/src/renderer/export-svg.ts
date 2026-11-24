@@ -27,7 +27,7 @@ import type {
   TableCellRender,
   TableRenderNode,
 } from '@genoffice/pptx-render'
-import { extrusionFrontFace } from '@genoffice/pptx-render'
+import { extrusionFrontFace, roundEndPath } from '@genoffice/pptx-render'
 import {
   anchoredTileCanvas,
   averageColor,
@@ -1191,7 +1191,42 @@ function emitChart(b: PageBuilder, chart: ChartRenderNode): string {
         ...(p.stroke ? { stroke: p.stroke, 'stroke-width': p.strokeWidthPx ?? 1 } : {}),
       }),
     )
-  for (const bar of chart.bars)
+  for (const p of chart.polylines.filter((q) => q.behind))
+    out.push(
+      el('path', {
+        d: polylinePath(p.points, smoothTension(p.smooth), !!p.closed),
+        fill: p.fillRadial
+          ? (b.fillPaint(
+              { kind: 'gradient', stops: p.fillRadial.stops, angleDeg: 0, radial: true },
+              p.fillRadial.r * Math.SQRT2,
+              p.fillRadial.r * Math.SQRT2,
+              { x: p.fillRadial.cx - p.fillRadial.r / Math.SQRT2, y: p.fillRadial.cy - p.fillRadial.r / Math.SQRT2 },
+            )?.paint ?? 'none')
+          : p.fillGradient
+          ? (b.fillPaint(
+              {
+                kind: 'gradient',
+                stops: p.fillGradient.stops,
+                angleDeg: 90,
+              },
+              1,
+              p.fillGradient.y2 - p.fillGradient.y1,
+              { x: 0, y: p.fillGradient.y1 },
+            )?.paint ?? 'none')
+          : (p.fill ?? 'none'),
+        stroke: p.widthPx > 0 ? p.color : undefined,
+        'stroke-width': p.widthPx > 0 ? p.widthPx : undefined,
+        'stroke-linecap': 'round',
+        'stroke-linejoin': 'round',
+        'stroke-dasharray': p.dash?.length ? p.dash.map(n).join(' ') : undefined,
+      }),
+    )
+  for (const bar of chart.bars) {
+    const rd = roundEndPath(bar)
+    if (rd) {
+      out.push(el('path', { d: rd, fill: bar.color }))
+      continue
+    }
     out.push(
       el('rect', {
         x: bar.x,
@@ -1203,21 +1238,53 @@ function emitChart(b: PageBuilder, chart: ChartRenderNode): string {
           : { fill: bar.color }),
       }),
     )
-  for (const p of chart.polylines)
+  }
+  for (const p of chart.polylines.filter((q) => !q.behind))
     out.push(
       el('path', {
         d: polylinePath(p.points, smoothTension(p.smooth), !!p.closed),
-        fill: p.fill ?? 'none',
-        stroke: p.color,
-        'stroke-width': p.widthPx,
+        fill: p.fillRadial
+          ? (b.fillPaint(
+              { kind: 'gradient', stops: p.fillRadial.stops, angleDeg: 0, radial: true },
+              p.fillRadial.r * Math.SQRT2,
+              p.fillRadial.r * Math.SQRT2,
+              { x: p.fillRadial.cx - p.fillRadial.r / Math.SQRT2, y: p.fillRadial.cy - p.fillRadial.r / Math.SQRT2 },
+            )?.paint ?? 'none')
+          : p.fillGradient
+          ? (b.fillPaint(
+              {
+                kind: 'gradient',
+                stops: p.fillGradient.stops,
+                angleDeg: 90,
+              },
+              1,
+              p.fillGradient.y2 - p.fillGradient.y1,
+              { x: 0, y: p.fillGradient.y1 },
+            )?.paint ?? 'none')
+          : (p.fill ?? 'none'),
+        stroke: p.widthPx > 0 ? p.color : undefined,
+        'stroke-width': p.widthPx > 0 ? p.widthPx : undefined,
         'stroke-linecap': 'round',
         'stroke-linejoin': 'round',
         'stroke-dasharray': p.dash?.length ? p.dash.map(n).join(' ') : undefined,
       }),
     )
-  for (const m of chart.markers) out.push(el('circle', { cx: m.x, cy: m.y, r: m.r, fill: m.color }))
+  for (const m of chart.markers)
+    out.push(
+      el('circle', {
+        cx: m.x,
+        cy: m.y,
+        r: m.r,
+        fill: m.color,
+        ...(m.stroke ? { stroke: m.stroke, 'stroke-width': 1 } : {}),
+      }),
+    )
   for (const s of chart.swatches)
-    out.push(el('rect', { x: s.x, y: s.y, width: s.w, height: s.h, fill: s.color, rx: 1, ry: 1 }))
+    out.push(
+      s.round
+        ? el('circle', { cx: s.x + s.w / 2, cy: s.y + s.h / 2, r: Math.min(s.w, s.h) / 2, fill: s.color })
+        : el('rect', { x: s.x, y: s.y, width: s.w, height: s.h, fill: s.color, rx: 1, ry: 1 }),
+    )
   for (const l of chart.labels) {
     const family = l.fontFamily ? displayFontFamily(l.fontFamily) : CHART_FONT
     b.fontFamilies.add(family)
@@ -1229,6 +1296,7 @@ function emitChart(b: PageBuilder, chart: ChartRenderNode): string {
           width: (l.w ?? 0) + l.fontSizePx * 0.6,
           height: l.fontSizePx * 1.35,
           fill: l.fill ?? 'none',
+          ...(l.round ? { rx: l.fontSizePx * 0.65, ry: l.fontSizePx * 0.65 } : {}),
           ...(l.stroke ? { stroke: l.stroke, 'stroke-width': 1 } : {}),
         }),
       )
@@ -1265,7 +1333,7 @@ function emitChart(b: PageBuilder, chart: ChartRenderNode): string {
         'stroke-width': chart.border.widthPx,
       }),
     )
-  return out.join('')
+  return chart.opacity != null ? el('g', { opacity: chart.opacity }, out.join('')) : out.join('')
 }
 
 function emitChip(b: PageBuilder, chip: ChipRenderNode): string {

@@ -1744,7 +1744,11 @@ export function SlideCanvas({
       <Layer x={CANVAS_BLEED} y={CANVAS_BLEED} listening={!drawMode}>
         <Transformer
           ref={trRef}
-          rotateEnabled
+          // [lily] a lone chart gets the shared object frame (adapter overlay: plot-area frame, round handles) instead of this chrome;
+          // the Transformer stays attached (drag proxy, selection rect) but draws nothing
+          {...(selectedIds.length === 1 && findNodeDeep(slide.nodes, selectedIds[0]!)?.type === 'chart'
+            ? { borderEnabled: false, enabledAnchors: [] as string[], rotateEnabled: false }
+            : { rotateEnabled: true })}
           // Rotating locks onto the 45° multiples when within a few degrees (PowerPoint-style snap)
           rotationSnaps={ROTATION_SNAPS}
           rotationSnapTolerance={ROTATION_SNAP_TOLERANCE}

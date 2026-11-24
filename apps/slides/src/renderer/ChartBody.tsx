@@ -4,11 +4,47 @@
  * top-left, the outer Group handles positioning.
  */
 import React from 'react'
-import { Rect, Text, Line, Circle, Arc, Path } from 'react-konva'
-import type { ChartRenderNode } from '@genoffice/pptx-render'
+import { Rect, Text, Line, Circle, Arc, Path, Group } from 'react-konva'
+import { roundEndPath, type ChartRenderNode } from '@genoffice/pptx-render'
 
 const CHART_FONT = 'Calibri, Carlito, Arial, sans-serif'
 import { displayFontFamily, fillToKonva, smoothTension } from './konva-adapter'
+
+
+type Poly = ChartRenderNode['polylines'][number]
+
+function polyline(p: Poly, key: string) {
+  return (
+    <Line
+      key={key}
+      points={p.points}
+      stroke={p.color}
+      strokeWidth={p.widthPx}
+      lineCap="round"
+      lineJoin="round"
+      tension={smoothTension(p.smooth)}
+      {...(p.closed ? { closed: true } : {})}
+      {...(p.fillRadial
+        ? {
+            fillRadialGradientStartPoint: { x: p.fillRadial.cx, y: p.fillRadial.cy },
+            fillRadialGradientStartRadius: 0,
+            fillRadialGradientEndPoint: { x: p.fillRadial.cx, y: p.fillRadial.cy },
+            fillRadialGradientEndRadius: p.fillRadial.r,
+            fillRadialGradientColorStops: p.fillRadial.stops.flatMap((st) => [st.pos, st.color]),
+          }
+        : p.fillGradient
+        ? {
+            fillLinearGradientStartPoint: { x: 0, y: p.fillGradient.y1 },
+            fillLinearGradientEndPoint: { x: 0, y: p.fillGradient.y2 },
+            fillLinearGradientColorStops: p.fillGradient.stops.flatMap((st) => [st.pos, st.color]),
+          }
+        : p.fill
+          ? { fill: p.fill }
+          : {})}
+      {...(p.dash ? { dash: p.dash } : {})}
+    />
+  )
+}
 
 export function ChartBody({
   chart,
@@ -17,8 +53,10 @@ export function ChartBody({
   chart: ChartRenderNode
   images?: Map<string, HTMLImageElement>
 }) {
-  return (
+  const body = (
     <>
+      {/* [lily] transparent hit area: the whole chart box selects the chart, not just its drawn marks */}
+      <Rect x={0} y={0} width={chart.box.w} height={chart.box.h} fill="rgba(0,0,0,0)" />
       {chart.bgFill && (
         <Rect
           x={0}
@@ -92,46 +130,56 @@ export function ChartBody({
           {...(p.stroke ? { stroke: p.stroke, strokeWidth: p.strokeWidthPx ?? 1 } : {})}
         />
       ))}
-      {chart.bars.map((b, i) => (
-        <Rect
-          key={`b${i}`}
-          x={b.x}
-          y={b.y}
-          width={b.w}
-          height={b.h}
-          {...(b.fill
-            ? fillToKonva(b.fill, b.w, b.h, images, { x: chart.box.x + b.x, y: chart.box.y + b.y })
-            : { fill: b.color })}
-        />
-      ))}
-      {chart.polylines.map((p, i) => (
-        <Line
-          key={`p${i}`}
-          points={p.points}
-          stroke={p.color}
-          strokeWidth={p.widthPx}
-          lineCap="round"
-          lineJoin="round"
-          tension={smoothTension(p.smooth)}
-          {...(p.closed ? { closed: true } : {})}
-          {...(p.fill ? { fill: p.fill } : {})}
-          {...(p.dash ? { dash: p.dash } : {})}
-        />
-      ))}
+      {chart.polylines.filter((p) => p.behind).map((p, i) => polyline(p, `pb${i}`))}
+      {chart.bars.map((b, i) => {
+        const d = roundEndPath(b)
+        return d ? (
+          <Path key={`b${i}`} data={d} fill={b.color} />
+        ) : (
+          <Rect
+            key={`b${i}`}
+            x={b.x}
+            y={b.y}
+            width={b.w}
+            height={b.h}
+            {...(b.fill
+              ? fillToKonva(b.fill, b.w, b.h, images, { x: chart.box.x + b.x, y: chart.box.y + b.y })
+              : { fill: b.color })}
+          />
+        )
+      })}
+      {chart.polylines.filter((p) => !p.behind).map((p, i) => polyline(p, `p${i}`))}
       {chart.markers.map((m, i) => (
-        <Circle key={`m${i}`} x={m.x} y={m.y} radius={m.r} fill={m.color} />
-      ))}
-      {chart.swatches.map((s, i) => (
-        <Rect
-          key={`s${i}`}
-          x={s.x}
-          y={s.y}
-          width={s.w}
-          height={s.h}
-          fill={s.color}
-          cornerRadius={1}
+        <Circle
+          key={`m${i}`}
+          x={m.x}
+          y={m.y}
+          radius={m.r}
+          fill={m.color}
+          {...(m.stroke ? { stroke: m.stroke, strokeWidth: 1 } : {})}
         />
       ))}
+      {chart.swatches.map((s, i) =>
+        s.round ? (
+          <Circle
+            key={`s${i}`}
+            x={s.x + s.w / 2}
+            y={s.y + s.h / 2}
+            radius={Math.min(s.w, s.h) / 2}
+            fill={s.color}
+          />
+        ) : (
+          <Rect
+            key={`s${i}`}
+            x={s.x}
+            y={s.y}
+            width={s.w}
+            height={s.h}
+            fill={s.color}
+            cornerRadius={1}
+          />
+        ),
+      )}
       {chart.labels.map(
         (l, i) =>
           (l.fill || l.stroke) && (
@@ -143,6 +191,7 @@ export function ChartBody({
               height={l.fontSizePx * 1.35}
               {...(l.fill ? { fill: l.fill } : {})}
               {...(l.stroke ? { stroke: l.stroke, strokeWidth: 1 } : {})}
+              {...(l.round ? { cornerRadius: l.fontSizePx * 0.65 } : {})}
             />
           ),
       )}
@@ -173,4 +222,5 @@ export function ChartBody({
       )}
     </>
   )
+  return chart.opacity != null ? <Group opacity={chart.opacity}>{body}</Group> : body
 }
