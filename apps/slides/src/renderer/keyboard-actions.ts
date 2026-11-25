@@ -69,9 +69,17 @@ export function slideRailHasFocus(): boolean {
 function editEntry(e: KeyboardEvent, ctx: ActionCtx): Partial<EditingState> | null {
   if (e.metaKey || e.ctrlKey || e.altKey) return null
   if (e.key.length === 1) return { replaceWith: e.key }
+  // [lily] IME first key (Korean/Japanese 'Process', keyCode 229): open the session with the text selected so the
+  // composition that follows lands in the editor and replaces it, like a typed character does
+  if (isImeStartKey(e)) return { selectAll: true }
   if (e.key !== 'Enter' && e.key !== 'F2') return null
   if (e.shiftKey || e.defaultPrevented || ctx.masterItems || ctx.viewMode === 'reading') return null
   return e.key === 'F2' ? { selectAll: true } : {}
+}
+
+/** [lily] keydown that starts an IME composition (the key itself must not be cancelled or the composition is lost) */
+function isImeStartKey(e: KeyboardEvent): boolean {
+  return !e.isComposing && (e.key === 'Process' || e.keyCode === 229)
 }
 
 /** One Shift+arrow step on a side; shrinking never drops below one step (or the side's current size if already thinner) */
@@ -281,7 +289,7 @@ export function handleGlobalKeydown(
     const ctx0 = entry && ctx.findNodeCtx(selectedIds[0]!)
     const n0 = ctx0?.node
     if (entry && n0 && isEditableText(n0)) {
-      e.preventDefault()
+      if (!isImeStartKey(e)) e.preventDefault() // [lily] keep the IME key alive
       ctx.setEditing({
         sourceId: n0.sourceId,
         ...entry,
