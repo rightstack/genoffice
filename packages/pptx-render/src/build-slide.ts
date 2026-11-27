@@ -301,6 +301,15 @@ function buildNodeInner(
         for (const sh of pt.previewShapes) {
           const o = sh.transform?.offset
           if (!o) continue
+          // [lily] a pie / arc / blockArc / chord draws only a sector of its box: Target List
+          // diagrams (PowerPoint's and LilyOffice's) stack quarter pies whose boxes reach far
+          // past the frame while the drawn quarters fit — bound the sector, not the box
+          const sector = sectorExtent(sh)
+          if (sector) {
+            bx = Math.max(bx, o.x + o.cx / 2 + sector.right)
+            by = Math.max(by, o.y + o.cy / 2 + sector.bottom)
+            continue
+          }
           // rotation-aware visual bounds: a rotated box's raw offset can lie far outside
           // the frame while the shape itself fits (90deg-rotated boxes swap their extents)
           const th = (((sh.transform?.rot ?? 0) / 60000) * Math.PI) / 180
@@ -340,6 +349,60 @@ function buildNodeInner(
     default:
       return null
   }
+}
+
+/** [lily] Preset adjust defaults (ECMA-376 presetShapeDefinitions) of the sector shapes, 60000ths of a degree. */
+const SECTOR_PRESETS: Record<string, { adj1: number; adj2: number; adj3?: number; center?: boolean }> = {
+  pie: { adj1: 0, adj2: 16200000, center: true },
+  arc: { adj1: 16200000, adj2: 0 },
+  blockArc: { adj1: 10800000, adj2: 0, adj3: 25000 },
+  chord: { adj1: 2700000, adj2: 16200000 },
+}
+
+/**
+ * [lily] Right / bottom reach (EMU, from the box centre) of what a sector preset actually draws,
+ * after the shape's flips and rotation; null for any other shape. Arc points follow the preset
+ * formulas: a ray angle on the ellipse (wd2, hd2), clockwise from the positive x axis.
+ */
+export function sectorExtent(sh: SlideElement): { right: number; bottom: number } | null {
+  const prst = (sh as { presetGeometry?: string }).presetGeometry
+  const def = prst ? SECTOR_PRESETS[prst] : undefined
+  const o = sh.transform?.offset
+  if (!def || !o || !(o.cx > 0) || !(o.cy > 0)) return null
+  const adj = (sh as { adjust?: Record<string, number> }).adjust ?? {}
+  const rad = (v: number) => (v / 60000) * (Math.PI / 180)
+  const st = rad(adj.adj1 ?? def.adj1)
+  let sw = rad(adj.adj2 ?? def.adj2) - st
+  if (sw <= 0) sw += 2 * Math.PI
+  const wd2 = o.cx / 2
+  const hd2 = o.cy / 2
+  const pts: [number, number][] = []
+  const arc = (wr: number, hr: number) => {
+    const n = 48
+    for (let i = 0; i <= n; i++) {
+      const a = st + (sw * i) / n
+      const t = Math.atan2(Math.sin(a) * wr, Math.cos(a) * hr)
+      pts.push([wr * Math.cos(t), hr * Math.sin(t)])
+    }
+  }
+  arc(wd2, hd2)
+  if (def.center) pts.push([0, 0])
+  if (def.adj3 != null) {
+    const dr = (Math.min(o.cx, o.cy) * Math.min(Math.max(adj.adj3 ?? def.adj3, 0), 50000)) / 100000
+    arc(Math.max(wd2 - dr, 0), Math.max(hd2 - dr, 0))
+  }
+  const th = (((sh.transform?.rot ?? 0) / 60000) * Math.PI) / 180
+  const c = Math.cos(th)
+  const s = Math.sin(th)
+  let right = -Infinity
+  let bottom = -Infinity
+  for (const [px, py] of pts) {
+    const x = sh.transform?.flipH ? -px : px
+    const y = sh.transform?.flipV ? -py : py
+    right = Math.max(right, x * c - y * s)
+    bottom = Math.max(bottom, x * s + y * c)
+  }
+  return { right, bottom }
 }
 
 /**
