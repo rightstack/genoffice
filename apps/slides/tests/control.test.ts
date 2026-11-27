@@ -90,4 +90,25 @@ describe('slides control hook', () => {
       result: { slide: 1, elements: ['e_2'], types: ['shape'] },
     })
   })
+
+  it('[lily] editCell opens a table cell through startEditCell', () => {
+    const table = {
+      ...node('t'),
+      type: 'table',
+      cells: [{ row: 1, col: 2 }],
+    } as unknown as RenderNode
+    const startEditCell = vi.fn()
+    const s = state({ slides: [slide([table])], startEditCell })
+    const ok = handleSlidesControl(
+      { cmd: 'editCell', target: { slide: 0, el: 's_t', row: 1, col: 2 } },
+      s,
+    )
+    expect(ok).toMatchObject({ status: 'ok' })
+    expect(startEditCell).toHaveBeenCalledWith('s_t', 1, 2)
+    const bad = handleSlidesControl(
+      { cmd: 'editCell', target: { slide: 0, el: 's_t', row: 5, col: 0 } },
+      s,
+    )
+    expect(bad).toMatchObject({ status: 'error' })
+  })
 })

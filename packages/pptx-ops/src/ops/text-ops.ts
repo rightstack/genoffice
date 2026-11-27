@@ -53,6 +53,7 @@ import {
   resolveGroup,
   resolveGroupChildId,
   resolveSlide,
+  type Op,
   type OpRecord,
 } from './registry'
 
@@ -255,6 +256,32 @@ register({
   },
 })
 
+/**
+ * [lily] Optional `cells` on setFont / setParagraphFormat: for a table, only those cells
+ * (row, tc index) change — the table tools format the selected cells outside edit mode.
+ */
+function resolveTextCells(op: Op, name: string): Array<{ row: number; col: number }> | undefined {
+  const raw = op.cells
+  if (raw == null) return undefined
+  if (!Array.isArray(raw) || raw.length > 4096) {
+    throw new GuidedError(
+      `op "${name}": cells must be an array (at most 4096) of { "row": number, "col": number } pairs.`,
+    )
+  }
+  return raw.map((entry, i) => {
+    const { row, col } = (entry ?? {}) as { row?: unknown; col?: unknown }
+    if (
+      !Number.isInteger(row) ||
+      !Number.isInteger(col) ||
+      (row as number) < 0 ||
+      (col as number) < 0
+    ) {
+      throw new GuidedError(`op "${name}": cells[${i}] row and col must be integers >= 0.`)
+    }
+    return { row: row as number, col: col as number }
+  })
+}
+
 // ── setFont ─────────────────────────────────────────────────────────────
 // Wholesale font/format change on one element (text/shape/table); the engine
 // decides acceptance so semantics can't drift from the legacy handler. Multi-
@@ -288,6 +315,7 @@ register({
         )
       }
     }
+    resolveTextCells(op, 'setFont')
     if (op.group) {
       const { index, slide } = resolveSlide(ctx, op)
       resolveGroup(op, index, slide.elements)
@@ -309,7 +337,7 @@ register({
       ok = setGroupChildFont(slide, groupId, id, font, sizeMap)
     } else {
       id = resolveElement(ctx, op).el.id
-      ok = setElementFont(slide, id, font, sizeMap)
+      ok = setElementFont(slide, id, font, sizeMap, resolveTextCells(op, 'setFont'))
     }
     if (!ok) {
       throw new GuidedError(`op "setFont": element "${id}" has no editable text to format.`)
@@ -372,6 +400,7 @@ register({
     if (fmt.rtl !== undefined && typeof fmt.rtl !== 'boolean') {
       throw new GuidedError('op "setParagraphFormat": "format.rtl" must be a boolean.')
     }
+    resolveTextCells(op, 'setParagraphFormat')
     if (op.group) {
       const { index, slide } = resolveSlide(ctx, op)
       resolveGroup(op, index, slide.elements)
@@ -396,7 +425,13 @@ register({
       ok = setGroupChildParagraphFormat(slide, groupId, id, format)
     } else {
       id = resolveElement(ctx, op).el.id
-      ok = setElementParagraphFormat(slide, id, format)
+      ok = setElementParagraphFormat(
+        slide,
+        id,
+        format,
+        undefined,
+        resolveTextCells(op, 'setParagraphFormat'),
+      )
     }
     if (!ok) {
       throw new GuidedError(`op "setParagraphFormat": element "${id}" has no paragraphs to format.`)

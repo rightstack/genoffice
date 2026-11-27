@@ -35,6 +35,38 @@ export interface TableStyleEdit {
   clearDirectFormatting?: boolean
   /** Cells the shading/border edit applies to, as (row, tc index); undefined = whole table */
   cells?: Array<{ row: number; col: number }>
+  /**
+   * [lily] Per-side cell borders: each entry sets one edge of one cell (row, tc index) — `ln` draws that
+   * line, null writes an explicit no-line (hides a table-style inside line too). Other edges stay as they are.
+   */
+  cellSides?: TableCellSideEdit[]
+}
+
+/** [lily] One cell edge for TableStyleEdit.cellSides */
+export interface TableCellSideEdit {
+  row: number
+  col: number
+  side: 'l' | 'r' | 't' | 'b'
+  ln: TableBorderLine | null
+}
+
+/** [lily] A cell border line: color #RRGGBB, width (EMU), prstDash preset, compound type */
+export interface TableBorderLine {
+  color: string
+  widthEmu: number
+  dash?:
+    | 'solid'
+    | 'sysDot'
+    | 'sysDash'
+    | 'dash'
+    | 'dashDot'
+    | 'lgDash'
+    | 'lgDashDot'
+    | 'lgDashDotDot'
+    | 'sysDashDot'
+    | 'sysDashDotDot'
+    | 'dot'
+  compound?: 'sng' | 'dbl' | 'thickThin' | 'thinThick' | 'tri'
 }
 
 // ── Preset styles ────────────────────────────────────────────────────
@@ -241,6 +273,94 @@ export function patchTableStyleXml(originalXml: string, edit: TableStyleEdit): s
     xml = edit.cells ? patchCellsTcPr(xml, edit) : patchAllTcPr(xml, edit)
   }
 
+  // ── 3. [lily] Per-side cell borders ────────────────────────────────
+  if (edit.cellSides?.length) xml = patchCellSides(xml, edit.cellSides)
+
+  return xml
+}
+
+const SIDE_TAG = { l: 'a:lnL', r: 'a:lnR', t: 'a:lnT', b: 'a:lnB' } as const
+const SIDE_ORDER = ['a:lnL', 'a:lnR', 'a:lnT', 'a:lnB'] as const
+
+/** [lily] XML for one cell edge (null = explicit no line) */
+function sideLnXml(tag: string, ln: TableBorderLine | null): string {
+  if (!ln) return `<${tag} w="12700"><a:noFill/></${tag}>`
+  const c = ln.color.replace('#', '').toUpperCase()
+  const w = Math.max(0, Math.round(ln.widthEmu))
+  const cmpd = ln.compound && ln.compound !== 'sng' ? ` cmpd="${ln.compound}"` : ''
+  const dash = ln.dash && ln.dash !== 'solid' ? `<a:prstDash val="${ln.dash}"/>` : ''
+  return `<${tag} w="${w}"${cmpd}><a:solidFill><a:srgbClr val="${c}"/></a:solidFill>${dash}</${tag}>`
+}
+
+/** [lily] Replace (or add) one edge line in a tcPr body, keeping CT_TableCellProperties order lnL → lnR → lnT → lnB → … */
+function setSideInTcPr(
+  inner: string,
+  side: 'l' | 'r' | 't' | 'b',
+  ln: TableBorderLine | null,
+): string {
+  const tag = SIDE_TAG[side]
+  const name = tag.slice(2)
+  inner = inner
+    .replace(new RegExp(`<a:${name}(?:\\s[^>]*)?/>`, 'g'), '')
+    .replace(new RegExp(`<a:${name}(?:\\s[^>]*)?>.*?</a:${name}>`, 'gs'), '')
+  const later = SIDE_ORDER.slice(SIDE_ORDER.indexOf(tag) + 1).map((t) => t.slice(2))
+  const re = new RegExp(
+    `<a:(${[...later, 'lnTlToBr', 'lnBlToTr', 'cell3D', 'solidFill', 'gradFill', 'pattFill', 'blipFill', 'noFill', 'grpFill', 'headers', 'extLst'].join('|')})[\\s>/]`,
+  )
+  // a:noFill/solidFill inside an earlier ln* must not be taken as the cell fill: search outside ln* elements
+  let at = -1
+  let cursor = 0
+  for (const m of [...inner.matchAll(LN_ELEMENT_RE), null]) {
+    const segEnd = m ? m.index! : inner.length
+    const seg = inner.slice(cursor, segEnd)
+    const hit = seg.search(re)
+    if (hit >= 0) {
+      at = cursor + hit
+      break
+    }
+    if (!m) break
+    // an ln* element itself that comes later in the sequence
+    if (later.includes(m[1] ?? m[2] ?? '')) {
+      at = m.index!
+      break
+    }
+    cursor = m.index! + m[0].length
+  }
+  const x = sideLnXml(tag, ln)
+  return at >= 0 ? inner.slice(0, at) + x + inner.slice(at) : inner + x
+}
+
+/** [lily] Apply TableStyleEdit.cellSides to the cells' tcPr (creating a tcPr when a cell has none) */
+function patchCellSides(xml: string, sides: TableCellSideEdit[]): string {
+  const byCell = new Map<string, TableCellSideEdit[]>()
+  for (const e of sides) {
+    const k = `${e.row},${e.col}`
+    byCell.set(k, [...(byCell.get(k) ?? []), e])
+  }
+  const cells = [...byCell.keys()]
+    .map((k) => k.split(',').map(Number) as [number, number])
+    .sort((a, b) => b[0] - a[0] || b[1] - a[1])
+  for (const [row, col] of cells) {
+    if (row < 0 || col < 0) continue
+    const tr = nthSpan(xml, 'a:tr', row)
+    if (!tr) continue
+    const tc = nthSpan(xml, 'a:tc', col, tr.start, tr.end)
+    if (!tc) continue
+    let tcXml = xml.slice(tc.start, tc.end)
+    const apply = (inner: string) =>
+      byCell.get(`${row},${col}`)!.reduce((acc, e) => setSideInTcPr(acc, e.side, e.ln), inner)
+    const m = /<a:tcPr([^>]*)\/>|<a:tcPr([^>]*)>(.*?)<\/a:tcPr>/s.exec(tcXml)
+    if (m) {
+      const attrs = m[1] ?? m[2] ?? ''
+      tcXml =
+        tcXml.slice(0, m.index) +
+        `<a:tcPr${attrs}>${apply(m[3] ?? '')}</a:tcPr>` +
+        tcXml.slice(m.index + m[0].length)
+    } else {
+      tcXml = tcXml.replace(/<\/a:tc>$/, `<a:tcPr>${apply('')}</a:tcPr></a:tc>`)
+    }
+    xml = xml.slice(0, tc.start) + tcXml + xml.slice(tc.end)
+  }
   return xml
 }
 

@@ -3347,6 +3347,8 @@ function parseTableCell(
 
   // Borders on four edges: a:lnL/R/T/B share a:ln's structure, so reuse parseStroke; style inside-borders as fallback
   const borders: TableCellBorders = {}
+  // [lily] an explicit <a:noFill/> edge hides the table style's inside line too (PowerPoint)
+  const noLine = new Set<string>()
   for (const [key, tag] of [
     ['l', 'a:lnL'],
     ['r', 'a:lnR'],
@@ -3360,9 +3362,10 @@ function parseTableCell(
     if (ln['@_w'] === '0' && !('a:noFill' in ln)) continue
     const stroke = parseStroke({ 'a:ln': ln }, ctx)
     if (stroke) borders[key] = stroke
+    else if (stroke === null) noLine.add(key)
   }
   for (const k of ['l', 'r', 't', 'b'] as const) {
-    if (inside?.[k] && !borders[k]) borders[k] = inside[k]
+    if (inside?.[k] && !borders[k] && !noLine.has(k)) borders[k] = inside[k]
   }
   if (Object.keys(borders).length) cell.borders = borders
 

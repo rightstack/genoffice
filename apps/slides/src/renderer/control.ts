@@ -2,7 +2,10 @@ import type { RenderNode, RenderSlide } from '@genoffice/pptx-render'
 
 /** Request/reply the shell relays from `genoffice open --slide/--el` and `genoffice selection`. */
 export type ControlRequest =
-  { cmd: 'goto'; target: { kind: string; slide?: number; el?: string } } | { cmd: 'selection' }
+  | { cmd: 'goto'; target: { kind: string; slide?: number; el?: string } }
+  | { cmd: 'selection' }
+  /** [lily] open one table cell for text editing (the host's own cell selection hands a double click here) */
+  | { cmd: 'editCell'; target: { slide: number; el: string; row: number; col: number } }
 
 export type ControlReply =
   | { status: 'ok'; result: Record<string, unknown> }
@@ -20,6 +23,8 @@ export interface SlidesControlState {
   setCurrent: (index: number) => void
   setSelectedIds: (ids: string[]) => void
   clearEditing: () => void
+  /** [lily] App.startEditCell */
+  startEditCell?: (sourceId: string, row: number, col: number) => void
 }
 
 const publicId = (node: RenderNode) => node.durableId ?? node.sourceId
@@ -59,6 +64,26 @@ export function handleSlidesControl(req: ControlRequest, state: SlidesControlSta
         types: selected.map((n) => n.type),
       },
     }
+  }
+  if (req.cmd === 'editCell') {
+    const { slide, el, row, col } = req.target
+    const node = state.slides[slide]?.nodes.find((n) => n.sourceId === el)
+    if (!node || node.type !== 'table' || !state.startEditCell) {
+      return {
+        status: 'error',
+        error: { reason: 'target_not_found', message: `no table ${el} on slide ${slide}` },
+      }
+    }
+    if (!node.cells.some((c) => c.row === row && c.col === col)) {
+      return {
+        status: 'error',
+        error: { reason: 'out_of_range', message: `no cell (${row}, ${col}) on table ${el}` },
+      }
+    }
+    if (slide !== state.current) state.setCurrent(slide)
+    state.setSelectedIds([el])
+    state.startEditCell(el, row, col)
+    return { status: 'ok', result: { slide, element: el, row, col } }
   }
   const { slide, el } = req.target
   const count = state.slides.length

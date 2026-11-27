@@ -381,6 +381,8 @@ export {
   TABLE_STYLE_PRESETS,
   type TableStyleEdit,
   type TableStylePreset,
+  type TableCellSideEdit,
+  type TableBorderLine,
 } from './table-edit'
 export { listMasterParts, parseMasterPart, type MasterPartInfo } from './master-edit'
 export {
@@ -3259,6 +3261,8 @@ export function setElementFont(
   elementId: string,
   patch: ElementFontPatch,
   sizeMap?: FontSizeMap,
+  /** [lily] Tables: only these cells (row, tc index); undefined = every cell */
+  cells?: ReadonlyArray<{ row: number; col: number }>,
 ): boolean {
   const el = slide.elements.find((e) => e.id === elementId)
   if (!el) return false
@@ -3278,6 +3282,7 @@ export function setElementFont(
       for (let c = 0; c < row.length; c++) {
         const cell = row[c]!
         if (cell.merged || !cell.text?.paragraphs.length) continue
+        if (cells && !cells.some((x) => x.row === r && x.col === c)) continue
         apply(cell.text.paragraphs)
         if (editTableCellText(slide, elementId, r, c, cell.text.paragraphs)) changed = true
       }
@@ -3645,6 +3650,8 @@ export function setElementParagraphFormat(
   elementId: string,
   patch: ParagraphFormatPatch,
   paraIndices?: number[],
+  /** [lily] Tables: only these cells (row, tc index); undefined = every cell */
+  cells?: ReadonlyArray<{ row: number; col: number }>,
 ): boolean {
   const el = slide.elements.find((e) => e.id === elementId)
   if (!el) return false
@@ -3668,6 +3675,7 @@ export function setElementParagraphFormat(
       for (let c = 0; c < row.length; c++) {
         const cell = row[c]!
         if (cell.merged || !cell.text?.paragraphs.length) continue
+        if (cells && !cells.some((x) => x.row === r && x.col === c)) continue
         applyParagraphFormat(cell.text.paragraphs, patch)
         if (editTableCellText(slide, elementId, r, c, cell.text.paragraphs)) changed = true
       }
@@ -3840,6 +3848,98 @@ export function editTableStructure(
   const newEl = fresh.elements[elIndex]
   if (!newEl) return null
   return { slide: fresh, elementId: newEl.id }
+}
+
+// ── [lily] Table row/column move ────────────────────────────────────────
+
+/** Move one row/column: `to` is the boundary it lands on (0 = before the first, n = after the last). */
+export type TableMoveOp = { axis: 'row' | 'col'; from: number; to: number }
+
+/** Reorder the given sibling spans (moving `from` to position `to`), keeping the bytes between them in place. */
+function reorderSpans(
+  xml: string,
+  spans: Array<{ start: number; end: number }>,
+  from: number,
+  to: number,
+): string {
+  const parts = spans.map((s) => xml.slice(s.start, s.end))
+  const [moved] = parts.splice(from, 1)
+  parts.splice(to, 0, moved!)
+  let out = xml.slice(0, spans[0]!.start)
+  for (let i = 0; i < parts.length; i++) {
+    out += parts[i]
+    out += i + 1 < spans.length ? xml.slice(spans[i]!.end, spans[i + 1]!.start) : ''
+  }
+  return out + xml.slice(spans[spans.length - 1]!.end)
+}
+
+function allTagSpans(xml: string, tag: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = []
+  for (let i = 0; ; i++) {
+    const span = nthTagSpan(xml, tag, i)
+    if (!span) break
+    spans.push(span)
+  }
+  return spans
+}
+
+/**
+ * [lily] Move a table row or column to another boundary in one step (XML surgery + materialize/reparse,
+ * like editTableStructure): rows reorder their <a:tr>; columns reorder <a:gridCol> and the tc in every
+ * row, so widths, heights, cell formatting and text all travel with the moved band. Tables with merged
+ * cells are refused (same rule as insert/delete). Returns the new element id and the band's new index.
+ */
+export function moveTableBand(
+  opened: OpenedPptx,
+  slideIndex: number,
+  elementId: string,
+  op: TableMoveOp,
+): { slide: Slide; elementId: string; index: number } | null {
+  const slide = opened.deck.slides[slideIndex]
+  if (!slide) return null
+  const elIndex = slide.elements.findIndex((e) => e.id === elementId)
+  const el = slide.elements[elIndex]
+  if (!el || el.type !== 'table') return null
+  let xml = patchedElementXml(el)
+  if (tableHasMerges(xml)) return null
+  const trSpans = allTagSpans(xml, 'a:tr')
+  const gridCols = gridColSpans(xml)
+  const n = op.axis === 'row' ? trSpans.length : gridCols.length
+  const { from, to } = op
+  if (
+    !Number.isInteger(from) ||
+    !Number.isInteger(to) ||
+    from < 0 ||
+    from >= n ||
+    to < 0 ||
+    to > n
+  ) {
+    return null
+  }
+  const index = to > from ? to - 1 : to
+  if (index === from) return null
+  if (op.axis === 'row') {
+    xml = reorderSpans(xml, trSpans, from, index)
+  } else {
+    // tc in every row, back to front so earlier offsets stay valid
+    for (let r = trSpans.length - 1; r >= 0; r--) {
+      const tr = trSpans[r]!
+      const trXml = xml.slice(tr.start, tr.end)
+      const tcs = allTagSpans(trXml, 'a:tc')
+      if (tcs.length !== n) return null
+      xml = xml.slice(0, tr.start) + reorderSpans(trXml, tcs, from, index) + xml.slice(tr.end)
+    }
+    xml = reorderSpans(xml, gridColSpans(xml), from, index)
+  }
+  el.dirty = el.dirtyTransform = el.dirtyFill = el.dirtyStroke = false
+  el.dirtyPPr = undefined
+  el.anchor.originalXml = xml
+  slide.structureDirty = true
+  const fresh = materializeSlide(opened, slideIndex)
+  if (!fresh) return null
+  const newEl = fresh.elements[elIndex]
+  if (!newEl) return null
+  return { slide: fresh, elementId: newEl.id, index }
 }
 
 // ── Table merge/split cells ─────────────────────────────────────────────

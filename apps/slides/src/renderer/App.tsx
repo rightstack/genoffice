@@ -3297,6 +3297,7 @@ export function App() {
         setCurrent,
         setSelectedIds,
         clearEditing: () => setEditing(null),
+        startEditCell,
       })
   })
 

@@ -436,7 +436,15 @@ export interface TableRenderNode extends RenderNodeBase {
   /** tblPr rtl="1": cell geometry is mirrored (logical column 1 rendered rightmost) */
   rtl?: boolean
   /** tblPr header-row / banded-row toggles (for the Ribbon "Table Design" display) */
-  styleFlags?: { firstRow: boolean; bandRow: boolean }
+  styleFlags?: {
+    firstRow: boolean
+    bandRow: boolean
+    /** [lily] the model's other region toggles ride along (build-slide copies el.styleFlags whole) */
+    lastRow?: boolean
+    firstCol?: boolean
+    lastCol?: boolean
+    bandCol?: boolean
+  }
 }
 
 // ── Charts (precomputed draw primitives, coordinates relative to the chart box top-left, px) ──

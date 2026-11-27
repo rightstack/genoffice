@@ -83,6 +83,23 @@ Common mistakes
 
 - Tables with merged cells refuse row/column surgery: split the merges first (`tableMerge` with `kind:"split"`).
 
+### tableMove
+
+`{axis:"row"|"col",from,to}`
+
+Moves one row or column to another boundary in one step: `to` is the boundary
+it lands on (`0` = before the first, the row/column count = after the last).
+Text, cell formatting, widths and heights travel with it.
+
+```json
+{ "op": "tableMove", "target": { "slide": 0, "el": "e_TABLE" }, "axis": "row", "from": 0, "to": 2 }
+```
+
+Common mistakes
+
+- `to` is a boundary, not the final index: moving row 0 below row 1 is `to: 2`.
+- Tables with merged cells refuse the move, like `tableStructure`.
+
 ### setTableRowHeight
 
 `{row,hEmu}`
@@ -121,7 +138,7 @@ Sets one column's width in EMU.
 
 ### setTableStyle
 
-`{styleName} | {styleId?,firstRow?,lastRow?,firstCol?,lastCol?,bandRow?,bandCol?,keepFormatting?,shadingColor?,borderColor?,borderWidthPt?,borderPreset?}`
+`{styleName} | {styleId?,firstRow?,lastRow?,firstCol?,lastCol?,bandRow?,bandCol?,keepFormatting?,shadingColor?,borderColor?,borderWidthPt?,borderPreset?,cells?,cellSides?}`
 
 Restyles the whole table: apply one fixed-color preset by `styleName`, pick one
 of PowerPoint's 74 built-in styles by `styleId` (gallery name such as
@@ -143,6 +160,8 @@ keeps them). `slides read` shows a table's current `style`.
 | borderColor                         | `#RRGGBB`             | Border line color                                                                                                                                                                                                                              |
 | borderWidthPt                       | number (pt)           | Border line width; 0 < pt <= 1584                                                                                                                                                                                                              |
 | borderPreset                        | `"all"` or `"none"`   | Draw all border lines, or clear them                                                                                                                                                                                                           |
+| cells                               | `[{row,col}]`         | Limit shading/borderPreset to these cells (col = tc index)                                                                                                                                                                                     |
+| cellSides                           | `[{row,col,side,ln}]` | One edge per entry: `side` `l`/`r`/`t`/`b`, `ln` `{color:"#RRGGBB",widthPt,dash?,compound?}` or `null` for no line                                                                                                                             |
 
 ```json
 { "op": "setTableStyle", "target": { "slide": 0, "el": "e_TABLE" }, "styleName": "zebraBlue" }

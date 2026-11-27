@@ -12,6 +12,7 @@ import {
   ensureTableStylePart,
   markChartEditable,
   mergeTableCells,
+  moveTableBand,
   setTableCellAnchor,
   setTableColWidth,
   setTableRowHeight,
@@ -21,6 +22,7 @@ import {
   type TableMergeOp,
   type TableStructureOp,
   type TableStyleEdit,
+  type TableCellSideEdit,
 } from '@genoffice/pptx-engine'
 import {
   BUILTIN_TABLE_STYLES,
@@ -152,6 +154,37 @@ register({
   },
 })
 
+// [lily] Move one row/column to another boundary (one op = one undo step)
+register({
+  name: 'tableMove',
+  validate(op, ctx) {
+    resolveElement(ctx, op, { types: ['table'] })
+    if (
+      (op.axis !== 'row' && op.axis !== 'col') ||
+      !Number.isInteger(op.from) ||
+      !Number.isInteger(op.to)
+    ) {
+      throw new GuidedError(
+        'op "tableMove" needs "axis" ("row"|"col"), "from" and "to" (integers).',
+      )
+    }
+  },
+  apply(op, ctx): OpRecord {
+    const { index, el } = resolveElement(ctx, op, { types: ['table'] })
+    const r = moveTableBand(ctx.opened, index, el.id, {
+      axis: op.axis as 'row' | 'col',
+      from: op.from as number,
+      to: op.to as number,
+    })
+    if (!r) {
+      throw new GuidedError(
+        `op "tableMove": moving ${op.axis} ${op.from} to boundary ${op.to} failed (out of range, no-op, or merged cells).`,
+      )
+    }
+    return { op, after: { elementId: r.elementId, index: r.index } }
+  },
+})
+
 register({
   name: 'setTableRowHeight',
   validate(op, ctx) {
@@ -236,7 +269,93 @@ const STYLE_FIELDS = [
   'borderWidthPt',
   'borderPreset',
   'cells',
+  'cellSides',
 ] as const
+
+const DASHES = new Set([
+  'solid',
+  'sysDot',
+  'sysDash',
+  'dash',
+  'dashDot',
+  'lgDash',
+  'lgDashDot',
+  'lgDashDotDot',
+  'sysDashDot',
+  'sysDashDotDot',
+  'dot',
+])
+const COMPOUNDS = new Set(['sng', 'dbl', 'thickThin', 'thinThick', 'tri'])
+
+/** [lily] setTableStyle "cellSides": [{row, col, side: l|r|t|b, ln: {color, widthPt, dash?, compound?} | null}] */
+function resolveCellSides(raw: unknown): TableCellSideEdit[] {
+  if (!Array.isArray(raw) || raw.length > MAX_TABLE_STYLE_CELLS) {
+    throw new GuidedError(
+      `op "setTableStyle": cellSides must be an array (at most ${MAX_TABLE_STYLE_CELLS}).`,
+    )
+  }
+  return raw.map((entry, i) => {
+    const e = (entry ?? {}) as { row?: unknown; col?: unknown; side?: unknown; ln?: unknown }
+    if (
+      !Number.isInteger(e.row) ||
+      !Number.isInteger(e.col) ||
+      (e.row as number) < 0 ||
+      (e.col as number) < 0
+    ) {
+      throw new GuidedError(
+        `op "setTableStyle": cellSides[${i}] row and col must be integers >= 0.`,
+      )
+    }
+    if (e.side !== 'l' && e.side !== 'r' && e.side !== 't' && e.side !== 'b') {
+      throw new GuidedError(
+        `op "setTableStyle": cellSides[${i}].side must be "l", "r", "t" or "b".`,
+      )
+    }
+    if (e.ln === null) return { row: e.row as number, col: e.col as number, side: e.side, ln: null }
+    const ln = (e.ln ?? {}) as {
+      color?: unknown
+      widthPt?: unknown
+      dash?: unknown
+      compound?: unknown
+    }
+    if (!HEX_RE.test(String(ln.color ?? '').trim())) {
+      throw new GuidedError(
+        `op "setTableStyle": cellSides[${i}].ln.color must be #RRGGBB (or ln: null for no line).`,
+      )
+    }
+    const w = Number(ln.widthPt)
+    if (!Number.isFinite(w) || w <= 0 || w > MAX_BORDER_WIDTH_PT) {
+      throw new GuidedError(
+        `op "setTableStyle": cellSides[${i}].ln.widthPt must be > 0 and <= 1584.`,
+      )
+    }
+    if (ln.dash != null && !DASHES.has(String(ln.dash))) {
+      throw new GuidedError(
+        `op "setTableStyle": cellSides[${i}].ln.dash must be one of ${[...DASHES].join(', ')}.`,
+      )
+    }
+    if (ln.compound != null && !COMPOUNDS.has(String(ln.compound))) {
+      throw new GuidedError(
+        `op "setTableStyle": cellSides[${i}].ln.compound must be one of ${[...COMPOUNDS].join(', ')}.`,
+      )
+    }
+    return {
+      row: e.row as number,
+      col: e.col as number,
+      side: e.side,
+      ln: {
+        color: String(ln.color).trim(),
+        widthEmu: Math.round(w * EMU_PER_PT),
+        ...(ln.dash != null
+          ? { dash: String(ln.dash) as NonNullable<TableCellSideEdit['ln']>['dash'] }
+          : {}),
+        ...(ln.compound != null
+          ? { compound: String(ln.compound) as NonNullable<TableCellSideEdit['ln']>['compound'] }
+          : {}),
+      },
+    }
+  })
+}
 
 interface ResolvedTableStyle {
   edit: TableStyleEdit
@@ -271,7 +390,7 @@ function resolveTableStyle(op: Op): ResolvedTableStyle {
   }
   if (!STYLE_FIELDS.some((f) => op[f] != null)) {
     throw new GuidedError(
-      'op "setTableStyle" needs "styleName", "styleId" (a built-in style name or GUID) or at least one of firstRow, lastRow, firstCol, lastCol, bandRow, bandCol, shadingColor, borderColor, borderWidthPt, borderPreset.',
+      'op "setTableStyle" needs "styleName", "styleId" (a built-in style name or GUID) or at least one of firstRow, lastRow, firstCol, lastCol, bandRow, bandCol, shadingColor, borderColor, borderWidthPt, borderPreset, cellSides.',
     )
   }
   let styleId: string | undefined
@@ -326,6 +445,7 @@ function resolveTableStyle(op: Op): ResolvedTableStyle {
         : {}),
       ...(op.borderPreset != null ? { borderPreset: op.borderPreset as 'all' | 'none' } : {}),
       ...(op.cells != null ? { cells: resolveStyleCells(op.cells) } : {}),
+      ...(op.cellSides != null ? { cellSides: resolveCellSides(op.cellSides) } : {}),
     },
   }
 }

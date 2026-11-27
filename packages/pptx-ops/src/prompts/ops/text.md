@@ -72,6 +72,7 @@ and bold" style requests; use `setText` when the words change.
 | font.bold, italic, underline, strike | boolean     | Only the keys you pass change                  |
 | font.color                           | `"#RRGGBB"` | Explicit color; clears theme-color inheritance |
 | group                                | string      | Only for a direct child of a group             |
+| cells                                | [{row,col}] | Tables: only these cells (col = tc index)      |
 
 ```json
 {
