@@ -40,6 +40,14 @@ export interface TableStyleEdit {
    * line, null writes an explicit no-line (hides a table-style inside line too). Other edges stay as they are.
    */
   cellSides?: TableCellSideEdit[]
+  /**
+   * [lily] Cell text insets (EMU, tcPr marL/marR/marT/marB) for `cells` (or every cell); a side left out stays as it is.
+   */
+  cellMargins?: { l?: number; r?: number; t?: number; b?: number }
+  /** [lily] Cell text direction (tcPr vert) for `cells` (or every cell): horz removes the attribute */
+  cellVert?: 'horz' | 'vert' | 'vert270'
+  /** [lily] Drop direct character formatting (bold/italic/underline/strike/size/color/highlight/typefaces) from every run in the table */
+  clearTextFormatting?: boolean
 }
 
 /** [lily] One cell edge for TableStyleEdit.cellSides */
@@ -123,6 +131,33 @@ const ID_ZEBRA_GRAY = '{A10FF1CE-0000-4000-9000-000000000002}'
 const ID_HEADER_DARKBLUE = '{A10FF1CE-0000-4000-9000-000000000003}'
 const ID_HEADER_ORANGE = '{A10FF1CE-0000-4000-9000-000000000004}'
 const ID_NO_BORDER = '{A10FF1CE-0000-4000-9000-000000000005}'
+/** [lily] LilyOffice default table look (same as lily-docs "Lily Table Grid") */
+const ID_LILY_GRID = '{A10FF1CE-0000-4000-9000-00000000011C}'
+
+/**
+ * [lily] "Lily Table Grid": 0.5pt black grid (outer + inside lines from the style, so a style change or
+ * "none" removes them) · header row bold on F2F2F2 · total row / first / last column bold · banded rows and
+ * columns F5F5F5 — every style option the panel switches shows a change (lily-docs Lily Table Grid).
+ */
+function lilyGridStyle(): string {
+  const ln = (tag: string) =>
+    `<a:${tag}><a:ln w="6350" cap="flat"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></a:${tag}>`
+  const fill = (c: string) => `<a:fill><a:solidFill><a:srgbClr val="${c}"/></a:solidFill></a:fill>`
+  const bold = '<a:tcTxStyle b="on"><a:srgbClr val="000000"/></a:tcTxStyle>'
+  return (
+    `<a:tblStyle styleId="${ID_LILY_GRID}" styleName="Lily Table Grid">` +
+    `<a:wholeTbl><a:tcTxStyle><a:srgbClr val="000000"/></a:tcTxStyle><a:tcStyle><a:tcBdr>` +
+    ['left', 'right', 'top', 'bottom', 'insideH', 'insideV'].map(ln).join('') +
+    `</a:tcBdr></a:tcStyle></a:wholeTbl>` +
+    `<a:band1H><a:tcStyle><a:tcBdr/>${fill('F5F5F5')}</a:tcStyle></a:band1H>` +
+    `<a:band1V><a:tcStyle><a:tcBdr/>${fill('F5F5F5')}</a:tcStyle></a:band1V>` +
+    `<a:lastCol>${bold}<a:tcStyle><a:tcBdr/></a:tcStyle></a:lastCol>` +
+    `<a:firstCol>${bold}<a:tcStyle><a:tcBdr/></a:tcStyle></a:firstCol>` +
+    `<a:lastRow>${bold}<a:tcStyle><a:tcBdr/></a:tcStyle></a:lastRow>` +
+    `<a:firstRow>${bold}<a:tcStyle><a:tcBdr/>${fill('F2F2F2')}</a:tcStyle></a:firstRow>` +
+    '</a:tblStyle>'
+  )
+}
 
 export interface TableStylePreset {
   tblPrXml: string
@@ -200,6 +235,13 @@ export const TABLE_STYLE_PRESETS: Record<string, TableStylePreset> = {
     description: 'All borders',
     border: { color: '#000000', widthEmu: 12700 },
   },
+  // [lily] header row only (lily-docs new-table look)
+  lilyGrid: {
+    tblPrXml: tblPr(ID_LILY_GRID, ' firstRow="1"'),
+    description: 'Lily table grid',
+    styleId: ID_LILY_GRID,
+    styleDefXml: lilyGridStyle(),
+  },
 }
 
 const EMPTY_TABLE_STYLES_XML =
@@ -275,6 +317,14 @@ export function patchTableStyleXml(originalXml: string, edit: TableStyleEdit): s
 
   // ── 3. [lily] Per-side cell borders ────────────────────────────────
   if (edit.cellSides?.length) xml = patchCellSides(xml, edit.cellSides)
+
+  // ── 4. [lily] Cell insets / text direction (tcPr attributes) ─────────
+  if (edit.cellMargins || edit.cellVert) {
+    xml = edit.cells ? patchCellsTcPr(xml, edit, true) : patchAllTcPr(xml, edit, true)
+  }
+
+  // ── 5. [lily] Clear direct character formatting ─────────────────────
+  if (edit.clearTextFormatting) xml = clearRunFormatting(xml)
 
   return xml
 }
@@ -478,8 +528,47 @@ function applyTcPrEdit(inner: string, edit: TableStyleEdit): string {
   return inner
 }
 
-/** Patch the fill/borders of every <a:tcPr> in the XML. */
-function patchAllTcPr(xml: string, edit: TableStyleEdit): string {
+/** [lily] tcPr attributes for cellMargins / cellVert (CT_TableCellProperties attributes — order is free) */
+function applyTcPrAttrs(attrs: string, edit: TableStyleEdit): string {
+  const m = edit.cellMargins
+  const emu = (v: number) => String(Math.max(0, Math.round(v)))
+  if (m?.l != null) attrs = setAttr(attrs, 'marL', emu(m.l))
+  if (m?.r != null) attrs = setAttr(attrs, 'marR', emu(m.r))
+  if (m?.t != null) attrs = setAttr(attrs, 'marT', emu(m.t))
+  if (m?.b != null) attrs = setAttr(attrs, 'marB', emu(m.b))
+  if (edit.cellVert) attrs = setAttr(attrs, 'vert', edit.cellVert === 'horz' ? undefined : edit.cellVert)
+  return attrs
+}
+
+const RPR_ATTRS = ['b', 'i', 'u', 'strike', 'sz', 'baseline', 'cap', 'spc', 'kern']
+const RPR_CHILDREN = 'solidFill|gradFill|pattFill|noFill|highlight|latin|ea|cs|sym|effectLst|ln|uLn|uFill|uLnTx|uFillTx'
+
+/** [lily] Strip direct character formatting from a:rPr / a:endParaRPr inside the table (links and lang stay) */
+function clearRunFormatting(xml: string): string {
+  const tbl = xml.indexOf('<a:tbl>')
+  if (tbl < 0) return xml
+  const clean = (tag: string, attrs: string, body: string | undefined) => {
+    for (const a of RPR_ATTRS) attrs = setAttr(attrs, a, undefined)
+    if (body === undefined) return `<a:${tag}${attrs}/>`
+    const kept = body
+      .replace(new RegExp(`<a:(${RPR_CHILDREN})(?:\\s[^>]*)?/>`, 'g'), '')
+      .replace(new RegExp(`<a:(${RPR_CHILDREN})(?:\\s[^>]*)?>.*?</a:\\1>`, 'gs'), '')
+    return `<a:${tag}${attrs}>${kept}</a:${tag}>`
+  }
+  const body = xml
+    .slice(tbl)
+    .replace(/<a:(rPr|endParaRPr)((?:\s[^>]*?)?)\/>/g, (_m, tag: string, attrs: string) =>
+      clean(tag, attrs, undefined),
+    )
+    .replace(
+      /<a:(rPr|endParaRPr)((?:\s[^>]*?)?)(?<!\/)>(.*?)<\/a:\1>/gs,
+      (_m, tag: string, attrs: string, inner: string) => clean(tag, attrs, inner),
+    )
+  return xml.slice(0, tbl) + body
+}
+
+/** Patch the fill/borders of every <a:tcPr> in the XML (`attrsOnly` = [lily] only tcPr attributes). */
+function patchAllTcPr(xml: string, edit: TableStyleEdit, attrsOnly = false): string {
   const out: string[] = []
   let cursor = 0
   // self-closing first: [^>]* in the paired form would also accept the '/' of <a:tcPr/> and run
@@ -489,8 +578,8 @@ function patchAllTcPr(xml: string, edit: TableStyleEdit): string {
   while ((m = re.exec(xml)) !== null) {
     out.push(xml.slice(cursor, m.index))
     // Existing children (non-self-closing form)
-    const inner = applyTcPrEdit(m[3] ?? '', edit)
-    const attrs = m[1] ?? m[2] ?? ''
+    const inner = attrsOnly ? (m[3] ?? '') : applyTcPrEdit(m[3] ?? '', edit)
+    const attrs = attrsOnly ? applyTcPrAttrs(m[1] ?? m[2] ?? '', edit) : (m[1] ?? m[2] ?? '')
     out.push(`<a:tcPr${attrs}>${inner}</a:tcPr>`)
     cursor = m.index + m[0].length
   }
@@ -522,7 +611,7 @@ function nthSpan(
 }
 
 /** Patch the fill/borders of the <a:tcPr> of just the cells in edit.cells (creating a tcPr when a cell has none). */
-function patchCellsTcPr(xml: string, edit: TableStyleEdit): string {
+function patchCellsTcPr(xml: string, edit: TableStyleEdit, attrsOnly = false): string {
   // Back to front so earlier spans stay valid while splicing
   const cells = [...edit.cells!].sort((a, b) => b.row - a.row || b.col - a.col)
   for (const { row, col } of cells) {
@@ -538,15 +627,17 @@ function patchCellsTcPr(xml: string, edit: TableStyleEdit): string {
     // outer cell's <a:txBody>/<a:tbl> would be swallowed and rewritten.
     const m = /<a:tcPr([^>]*)\/>|<a:tcPr([^>]*)>(.*?)<\/a:tcPr>/s.exec(tcXml)
     if (m) {
-      const inner = applyTcPrEdit(m[3] ?? '', edit)
-      const attrs = m[1] ?? m[2] ?? ''
+      const inner = attrsOnly ? (m[3] ?? '') : applyTcPrEdit(m[3] ?? '', edit)
+      const attrs = attrsOnly ? applyTcPrAttrs(m[1] ?? m[2] ?? '', edit) : (m[1] ?? m[2] ?? '')
       tcXml =
         tcXml.slice(0, m.index) +
         `<a:tcPr${attrs}>${inner}</a:tcPr>` +
         tcXml.slice(m.index + m[0].length)
     } else {
       // tcPr follows txBody in CT_TableCell
-      tcXml = tcXml.replace(/<\/a:tc>$/, `<a:tcPr>${applyTcPrEdit('', edit)}</a:tcPr></a:tc>`)
+      tcXml = attrsOnly
+        ? tcXml.replace(/<\/a:tc>$/, `<a:tcPr${applyTcPrAttrs('', edit)}/></a:tc>`)
+        : tcXml.replace(/<\/a:tc>$/, `<a:tcPr>${applyTcPrEdit('', edit)}</a:tcPr></a:tc>`)
     }
     xml = xml.slice(0, tc.start) + tcXml + xml.slice(tc.end)
   }

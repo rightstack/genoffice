@@ -3323,6 +3323,9 @@ function parseTableCell(
       t: intOr(tcPr['@_marT'], 45720),
       b: intOr(tcPr['@_marB'], 45720),
     }
+    // [lily] tcPr vert: cell text direction (vert = 90°, vert270 = 270°), drawn like a shape body's vert
+    const vert = tcPr['@_vert']
+    if (vert === 'vert' || vert === 'vert270' || vert === 'eaVert') text.vert = vert
     cell.text = text
   }
 

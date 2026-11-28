@@ -138,7 +138,7 @@ Sets one column's width in EMU.
 
 ### setTableStyle
 
-`{styleName} | {styleId?,firstRow?,lastRow?,firstCol?,lastCol?,bandRow?,bandCol?,keepFormatting?,shadingColor?,borderColor?,borderWidthPt?,borderPreset?,cells?,cellSides?}`
+`{styleName} | {styleId?,firstRow?,lastRow?,firstCol?,lastCol?,bandRow?,bandCol?,keepFormatting?,shadingColor?,borderColor?,borderWidthPt?,borderPreset?,cells?,cellSides?,cellMargins?,cellVert?,clearTextFormatting?}`
 
 Restyles the whole table: apply one fixed-color preset by `styleName`, pick one
 of PowerPoint's 74 built-in styles by `styleId` (gallery name such as
@@ -150,7 +150,7 @@ keeps them). `slides read` shows a table's current `style`.
 
 | Field                               | Type                  | Notes                                                                                                                                                                                                                                          |
 | ----------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| styleName                           | string                | `none`, `lightGrid`, `zebraBlue`, `zebraGray`, `headerDarkBlue`, `headerOrange`, `noBorder`, `fullBorder`                                                                                                                                      |
+| styleName                           | string                | `none`, `lightGrid`, `zebraBlue`, `zebraGray`, `headerDarkBlue`, `headerOrange`, `noBorder`, `fullBorder`, `lilyGrid`                                                                                                                                    |
 | styleId                             | string                | Built-in gallery name or `{GUID}`: `No Style, No Grid`, `No Style, Table Grid`, `Themed Style 1/2 - Accent N`, `Light Style 1/2/3 [- Accent N]`, `Medium Style 1/2/3/4 [- Accent N]`, `Dark Style 1 [- Accent N]`, `Dark Style 2 [- Accent N]` |
 | firstRow                            | boolean               | Header-row emphasis                                                                                                                                                                                                                            |
 | lastRow, firstCol, lastCol, bandCol | boolean               | Total row, first/last column emphasis, banded columns                                                                                                                                                                                          |
@@ -162,6 +162,9 @@ keeps them). `slides read` shows a table's current `style`.
 | borderPreset                        | `"all"` or `"none"`   | Draw all border lines, or clear them                                                                                                                                                                                                           |
 | cells                               | `[{row,col}]`         | Limit shading/borderPreset to these cells (col = tc index)                                                                                                                                                                                     |
 | cellSides                           | `[{row,col,side,ln}]` | One edge per entry: `side` `l`/`r`/`t`/`b`, `ln` `{color:"#RRGGBB",widthPt,dash?,compound?}` or `null` for no line                                                                                                                             |
+| cellMargins                         | `{l?,r?,t?,b?}` (pt)  | Cell text insets, 0–144 pt; limited to `cells` when given                                                                                                                                                                                      |
+| cellVert                            | string                | Cell text direction `horz`, `vert` (90°) or `vert270`; limited to `cells` when given                                                                                                                                                           |
+| clearTextFormatting                 | boolean               | Drop direct character formatting (bold, italic, size, color, typeface) from every run in the table                                                                                                                                             |
 
 ```json
 { "op": "setTableStyle", "target": { "slide": 0, "el": "e_TABLE" }, "styleName": "zebraBlue" }

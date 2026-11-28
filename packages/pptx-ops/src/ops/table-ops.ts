@@ -270,6 +270,9 @@ const STYLE_FIELDS = [
   'borderPreset',
   'cells',
   'cellSides',
+  'cellMargins',
+  'cellVert',
+  'clearTextFormatting',
 ] as const
 
 const DASHES = new Set([
@@ -357,6 +360,35 @@ function resolveCellSides(raw: unknown): TableCellSideEdit[] {
   })
 }
 
+/** [lily] setTableStyle "cellMargins": {l?, r?, t?, b?} in pt (0..144) → EMU */
+function resolveCellMargins(raw: unknown): NonNullable<TableStyleEdit['cellMargins']> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new GuidedError('op "setTableStyle": cellMargins must be an object {l?, r?, t?, b?} in pt.')
+  }
+  const out: NonNullable<TableStyleEdit['cellMargins']> = {}
+  for (const k of ['l', 'r', 't', 'b'] as const) {
+    const v = (raw as Record<string, unknown>)[k]
+    if (v == null) continue
+    const n = Number(v)
+    if (!Number.isFinite(n) || n < 0 || n > 144) {
+      throw new GuidedError(`op "setTableStyle": cellMargins.${k} must be a number of pt between 0 and 144.`)
+    }
+    out[k] = Math.round(n * EMU_PER_PT)
+  }
+  if (!Object.keys(out).length) {
+    throw new GuidedError('op "setTableStyle": cellMargins needs at least one of l, r, t, b.')
+  }
+  return out
+}
+
+/** [lily] setTableStyle "cellVert": horz | vert | vert270 */
+function resolveCellVert(raw: unknown): NonNullable<TableStyleEdit['cellVert']> {
+  if (raw !== 'horz' && raw !== 'vert' && raw !== 'vert270') {
+    throw new GuidedError('op "setTableStyle": cellVert must be "horz", "vert" or "vert270".')
+  }
+  return raw
+}
+
 interface ResolvedTableStyle {
   edit: TableStyleEdit
   stylePart?: { styleId: string; styleDefXml: string }
@@ -390,7 +422,7 @@ function resolveTableStyle(op: Op): ResolvedTableStyle {
   }
   if (!STYLE_FIELDS.some((f) => op[f] != null)) {
     throw new GuidedError(
-      'op "setTableStyle" needs "styleName", "styleId" (a built-in style name or GUID) or at least one of firstRow, lastRow, firstCol, lastCol, bandRow, bandCol, shadingColor, borderColor, borderWidthPt, borderPreset, cellSides.',
+      'op "setTableStyle" needs "styleName", "styleId" (a built-in style name or GUID) or at least one of firstRow, lastRow, firstCol, lastCol, bandRow, bandCol, shadingColor, borderColor, borderWidthPt, borderPreset, cellSides, cellMargins, cellVert, clearTextFormatting.',
     )
   }
   let styleId: string | undefined
@@ -446,6 +478,9 @@ function resolveTableStyle(op: Op): ResolvedTableStyle {
       ...(op.borderPreset != null ? { borderPreset: op.borderPreset as 'all' | 'none' } : {}),
       ...(op.cells != null ? { cells: resolveStyleCells(op.cells) } : {}),
       ...(op.cellSides != null ? { cellSides: resolveCellSides(op.cellSides) } : {}),
+      ...(op.cellMargins != null ? { cellMargins: resolveCellMargins(op.cellMargins) } : {}),
+      ...(op.cellVert != null ? { cellVert: resolveCellVert(op.cellVert) } : {}),
+      ...(op.clearTextFormatting === true ? { clearTextFormatting: true } : {}),
     },
   }
 }

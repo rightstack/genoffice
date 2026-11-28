@@ -907,6 +907,8 @@ function buildTable(
     gridY: rowY,
     ...(el.rtl ? { rtl: true } : {}),
     ...(el.styleFlags ? { styleFlags: el.styleFlags } : {}),
+    // [lily] the table style id rides along for the host's style gallery
+    ...(el.styleId ? { styleId: el.styleId } : {}),
   }
 }
 

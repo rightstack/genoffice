@@ -223,9 +223,11 @@ describe('patchTableStyleXml', () => {
         'headerOrange',
         'noBorder',
         'fullBorder',
+        // [lily] LilyOffice default look
+        'lilyGrid',
       ]).toContain(key)
     }
-    expect(Object.keys(TABLE_STYLE_PRESETS)).toHaveLength(8)
+    expect(Object.keys(TABLE_STYLE_PRESETS)).toHaveLength(9) // [lily] + lilyGrid
   })
 
   it('fixed-color presets: styleDefXml uses literal srgbClr, tblPr references the same styleId', () => {

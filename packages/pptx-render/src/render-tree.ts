@@ -435,6 +435,8 @@ export interface TableRenderNode extends RenderNodeBase {
   gridY: number[]
   /** tblPr rtl="1": cell geometry is mirrored (logical column 1 rendered rightmost) */
   rtl?: boolean
+  /** [lily] a:tableStyleId (built-in GUID or custom style id) */
+  styleId?: string
   /** tblPr header-row / banded-row toggles (for the Ribbon "Table Design" display) */
   styleFlags?: {
     firstRow: boolean
